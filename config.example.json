@@ -1,0 +1,8 @@
+{
+    "instance_id": "i-XXXXXXXXXXXXXXXXX",
+    "profile": "PS-Admin-abc",
+    "region": "ap-northeast-1",
+    "local_port": 15432,
+    "remote_port": 5432,
+    "sso_start_url": "https://d-XXXXXXXXXX.awsapps.com/start"
+}
