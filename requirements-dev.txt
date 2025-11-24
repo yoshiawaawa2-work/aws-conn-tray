@@ -1,5 +1,5 @@
-# 開発用の追加ツール
--r requirements.txt
+# 開発用の追加ツール（実行依存は OS パッケージで提供されるため pip 不要）
+# OS 依存: python3-gi, gir1.2-ayatanaappindicator3-0.1, libnotify-bin など
 
 # フォーマッタ / 静的解析
 black

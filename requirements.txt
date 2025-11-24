@@ -1,2 +1,3 @@
-# Gtk/AppIndicator binding for Python
-PyGObject
+# このアプリの実行に必要なライブラリは OS パッケージで提供されるため、
+# pip でインストールするものはありません。
+# 依存パッケージ（例: python3-gi, gir1.2-ayatanaappindicator3-0.1）は apt で導入してください。
