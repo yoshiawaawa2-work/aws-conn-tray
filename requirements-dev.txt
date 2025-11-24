@@ -1,0 +1,7 @@
+# 開発用の追加ツール
+-r requirements.txt
+
+# フォーマッタ / 静的解析
+black
+flake8
+mypy
