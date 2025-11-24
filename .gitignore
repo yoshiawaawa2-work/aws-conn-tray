@@ -9,6 +9,7 @@ venv/
 
 # ツール固有
 .envrc
+config.json
 .DS_Store
 .coverage
 .pytest_cache/
