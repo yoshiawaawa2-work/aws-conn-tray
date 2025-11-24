@@ -42,7 +42,7 @@ except (ValueError, ImportError):
     gi.require_version("AppIndicator3", "0.1")
     from gi.repository import AppIndicator3 as AppIndicator
 
-from gi.repository import Gtk, GObject
+from gi.repository import Gtk, GObject, GLib
 
 # ------------------------------------------------------------
 # 設定ファイルの読み込み
@@ -69,7 +69,8 @@ INSTANCE_ID = config["instance_id"]     # 踏み台 EC2 のインスタンス ID
 PROFILE     = config["profile"]         # AWS CLI プロファイル名 (SSO 用)
 REGION      = config["region"]          # リージョン (例: ap-northeast-1)
 LOCAL_PORT  = int(config["local_port"]) # ローカル側で開くポート (例: 15432)
-REMOTE_PORT = int(config["remote_port"])# RDS のポート (例: 5432)
+REMOTE_HOST = config.get("remote_host")  # RDS のホスト名 (例: xxx.rds.amazonaws.com)
+REMOTE_PORT = int(config["remote_port"]) # RDS のポート (例: 5432)
 SSO_URL     = config["sso_start_url"]   # IAM Identity Center (SSO) のユーザーポータル URL
 
 # アイコンディレクトリ（このスクリプトと同一階層の icons/ を想定）
@@ -149,11 +150,16 @@ def start_port_forward():
         # すでに生きている
         return
 
+    if not REMOTE_HOST:
+        notify("設定エラー", "config.json の remote_host が設定されていません。")
+        return
+
+    # RDS などの別ホストに転送するため、RemoteHost 用のドキュメントを使う
     cmd = [
         "aws", "ssm", "start-session",
         "--target", INSTANCE_ID,
-        "--document-name", "AWS-StartPortForwardingSession",
-        "--parameters", f"portNumber={REMOTE_PORT},localPortNumber={LOCAL_PORT}",
+        "--document-name", "AWS-StartPortForwardingSessionToRemoteHost",
+        "--parameters", f"host={REMOTE_HOST},portNumber={REMOTE_PORT},localPortNumber={LOCAL_PORT}",
         "--profile", PROFILE,
         "--region", REGION,
     ]
@@ -271,8 +277,8 @@ class TrayApp:
             # 万一アイコンが無ければ何もしない（またはデフォルトに戻す）
             return
         # Gtk の UI 更新はメインスレッドで行う必要があるため、
-        # GObject.idle_add を使ってメインスレッドに投げる。
-        GObject.idle_add(self.indicator.set_icon, icon_path, priority=GObject.PRIORITY_DEFAULT)
+        # GLib.idle_add を使ってメインスレッドに投げる。
+        GLib.idle_add(self.indicator.set_icon, icon_path, priority=GLib.PRIORITY_DEFAULT)
 
     # -------------------- メイン監視ループ --------------------
 
