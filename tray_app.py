@@ -264,6 +264,10 @@ class TrayApp:
         バックグラウンドスレッドを止め、Gtk メインループを終了する。
         """
         self._stop_event.set()
+        # スレッドが Gtk オブジェクトを触っている最中に終了すると警告が出ることがあるため、
+        # 少し待ってからメインループを終了する。
+        if self.thread.is_alive():
+            self.thread.join(timeout=2)
         Gtk.main_quit()
 
     # -------------------- アイコン制御 --------------------
@@ -272,13 +276,25 @@ class TrayApp:
         """
         color に "red" / "yellow" / "green" を指定してアイコン画像を切り替える。
         """
+        if self._stop_event.is_set():
+            # 終了処理中は何もしない
+            return
         icon_path = os.path.join(ICON_DIR, f"{color}.png")
         if not os.path.exists(icon_path):
             # 万一アイコンが無ければ何もしない（またはデフォルトに戻す）
             return
         # Gtk の UI 更新はメインスレッドで行う必要があるため、
         # GLib.idle_add を使ってメインスレッドに投げる。
-        GLib.idle_add(self.indicator.set_icon, icon_path, priority=GLib.PRIORITY_DEFAULT)
+        def _update_icon():
+            if self._stop_event.is_set():
+                return False
+            try:
+                self.indicator.set_icon(icon_path)
+            except Exception:
+                return False
+            return False  # 一度だけ実行
+
+        GLib.idle_add(_update_icon, priority=GLib.PRIORITY_DEFAULT)
 
     # -------------------- メイン監視ループ --------------------
 
