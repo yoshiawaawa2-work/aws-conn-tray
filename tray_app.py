@@ -31,6 +31,7 @@ import datetime
 import subprocess
 import threading
 import time
+import sys
 
 # Gtk / AppIndicator のバージョン指定
 gi.require_version("Gtk", "3.0")
@@ -44,58 +45,48 @@ except (ValueError, ImportError):
 
 from gi.repository import Gtk, GObject, GLib
 
+from app_utils import (
+    APP_ROOT,
+    CONFIG_DIR,
+    CONFIG_PATH,
+    LOG_PATH,
+    check_prerequisites,
+    log_message,
+)
+
 # ------------------------------------------------------------
 # 設定ファイルの読み込み
 # ------------------------------------------------------------
 
-CONFIG_PATH = os.path.expanduser("~/.config/aws-rds-tray/config.json")
-LOG_DIR = os.path.expanduser("~/.cache/aws-rds-tray")
-LOG_PATH = os.path.join(LOG_DIR, "tray.log")
-
 def load_config():
     """
-    設定ファイル (config.json) を読み込み、辞書として返す。
-    基本的に ~/.config/aws-rds-tray/config.json を前提とする。
+    設定ファイル (config/config.json) を読み込み、辞書として返す。
     """
     if not os.path.exists(CONFIG_PATH):
         raise FileNotFoundError(
             f"設定ファイルが見つかりません: {CONFIG_PATH}\n"
-            "config.example.json をコピーして編集してください。"
+            f"インストーラまたは config.example.json を元に {CONFIG_PATH} を作成してください。"
         )
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
 config = load_config()
 
-INSTANCE_ID = config["instance_id"]     # 踏み台 EC2 のインスタンス ID (i-xxxxxxxxxx)
-PROFILE     = config["profile"]         # AWS CLI プロファイル名 (SSO 用)
-REGION      = config["region"]          # リージョン (例: ap-northeast-1)
-LOCAL_PORT  = int(config["local_port"]) # ローカル側で開くポート (例: 15432)
+INSTANCE_ID = config["instance_id"]      # 踏み台 EC2 のインスタンス ID (i-xxxxxxxxxx)
+PROFILE     = config["profile"]          # AWS CLI プロファイル名 (SSO 用)
+REGION      = config["region"]           # リージョン (例: ap-northeast-1)
+LOCAL_PORT  = int(config["local_port"])  # ローカル側で開くポート (例: 15432)
 REMOTE_HOST = config.get("remote_host")  # RDS のホスト名 (例: xxx.rds.amazonaws.com)
 REMOTE_PORT = int(config["remote_port"]) # RDS のポート (例: 5432)
-SSO_URL     = config["sso_start_url"]   # IAM Identity Center (SSO) のユーザーポータル URL
+SSO_URL     = config["sso_start_url"]    # IAM Identity Center (SSO) のユーザーポータル URL
 SSO_LOGIN_TIMEOUT = int(config.get("sso_login_timeout_seconds", 900))  # SSO ログイン待ちタイムアウト（秒）
 
-# アイコンディレクトリ（このスクリプトと同一階層の icons/ を想定）
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ICON_DIR = os.path.join(BASE_DIR, "icons")
+# アイコンディレクトリ（インストール先直下の icons/ を想定）
+ICON_DIR = os.path.join(APP_ROOT, "icons")
 
 # ------------------------------------------------------------
 # ユーティリティ関数
 # ------------------------------------------------------------
-
-def log_message(message: str) -> None:
-    """
-    簡易ログを ~/.cache/aws-rds-tray/tray.log に出力する。
-    ログ出力に失敗してもアプリは止めない。
-    """
-    try:
-        os.makedirs(LOG_DIR, exist_ok=True)
-        timestamp = datetime.datetime.now().isoformat()
-        with open(LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(f"{timestamp} {message}\n")
-    except Exception:
-        pass
 
 def notify(title: str, message: str) -> None:
     """
@@ -198,6 +189,27 @@ def is_port_forward_alive() -> bool:
     if ssm_process is None:
         return False
     return ssm_process.poll() is None
+
+# ------------------------------------------------------------
+# 前提条件チェック
+# ------------------------------------------------------------
+
+SUPPORTED_PLATFORMS = ("linux", "linux2", "win32")
+
+
+def ensure_supported_os():
+    if sys.platform not in SUPPORTED_PLATFORMS:
+        notify("非対応OS", "このアプリは Linux/Windows のみ対応しています。")
+        raise SystemExit(1)
+
+
+def ensure_prerequisites():
+    ok, issues = check_prerequisites(PROFILE, REGION, INSTANCE_ID, REMOTE_HOST)
+    if not ok:
+        for issue in issues:
+            notify("前提条件エラー", issue)
+        raise SystemExit(1)
+    log_message("Prerequisite check passed")
 
 # ------------------------------------------------------------
 # 起動時の SSO ログイン
@@ -429,7 +441,9 @@ class TrayApp:
 # ------------------------------------------------------------
 
 def main():
-    # 起動時に SSO ログインを自動実行し、完了後にトレイアプリを起動する
+    # OS と前提条件を確認し、SSO ログインを自動実行してからトレイアプリを起動する
+    ensure_supported_os()
+    ensure_prerequisites()
     initial_sso_login()
     app = TrayApp()
     Gtk.main()
