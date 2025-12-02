@@ -74,6 +74,7 @@ LOCAL_PORT  = int(config["local_port"]) # ローカル側で開くポート (例
 REMOTE_HOST = config.get("remote_host")  # RDS のホスト名 (例: xxx.rds.amazonaws.com)
 REMOTE_PORT = int(config["remote_port"]) # RDS のポート (例: 5432)
 SSO_URL     = config["sso_start_url"]   # IAM Identity Center (SSO) のユーザーポータル URL
+SSO_LOGIN_TIMEOUT = int(config.get("sso_login_timeout_seconds", 900))  # SSO ログイン待ちタイムアウト（秒）
 
 # アイコンディレクトリ（このスクリプトと同一階層の icons/ を想定）
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -202,7 +203,7 @@ def is_port_forward_alive() -> bool:
 # 起動時の SSO ログイン
 # ------------------------------------------------------------
 
-def initial_sso_login(timeout_seconds: int = 180) -> None:
+def initial_sso_login() -> None:
     """
     アプリ起動時に aws sso login を自動実行する。
     成功しない場合は通知・ログ出力の上で終了する。
@@ -220,12 +221,12 @@ def initial_sso_login(timeout_seconds: int = 180) -> None:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout_seconds,
+            timeout=SSO_LOGIN_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
         notify(
             "SSO ログインがタイムアウトしました",
-            f"{timeout_seconds}秒以内にログインが完了しませんでした。ネットワークやブラウザを確認してください。"
+            f"{SSO_LOGIN_TIMEOUT}秒以内にログインが完了しませんでした。ネットワークやブラウザを確認してください。"
         )
         raise SystemExit(1)
     except FileNotFoundError:
