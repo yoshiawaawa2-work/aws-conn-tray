@@ -32,6 +32,7 @@ import subprocess
 import threading
 import time
 import sys
+from typing import Optional
 
 # Gtk / AppIndicator のバージョン指定
 gi.require_version("Gtk", "3.0")
@@ -80,6 +81,8 @@ REMOTE_HOST = config.get("remote_host")  # RDS のホスト名 (例: xxx.rds.ama
 REMOTE_PORT = int(config["remote_port"]) # RDS のポート (例: 5432)
 SSO_URL     = config["sso_start_url"]    # IAM Identity Center (SSO) のユーザーポータル URL
 SSO_LOGIN_TIMEOUT = int(config.get("sso_login_timeout_seconds", 900))  # SSO ログイン待ちタイムアウト（秒）
+SSO_AUTO_REFRESH_MARGIN = int(config.get("sso_auto_refresh_margin_seconds", 300))  # 自動更新を試す残り秒数
+TUNNEL_CHECK_INTERVAL = int(config.get("tunnel_check_interval_seconds", 10))  # トンネル確認間隔（秒）
 
 # アイコンディレクトリ（インストール先直下の icons/ を想定）
 ICON_DIR = os.path.join(APP_ROOT, "icons")
@@ -212,56 +215,94 @@ def ensure_prerequisites():
     log_message("Prerequisite check passed")
 
 # ------------------------------------------------------------
-# 起動時の SSO ログイン
+# SSO ログイン
 # ------------------------------------------------------------
 
-def initial_sso_login() -> None:
+def run_sso_login(timeout: Optional[int] = None) -> bool:
     """
-    アプリ起動時に aws sso login を自動実行する。
-    成功しない場合は通知・ログ出力の上で終了する。
+    aws sso login を実行し、トークンが有効化されたら True。
+    ブラウザはシステム既定を起動する（最小化などは環境依存のため保証できない）。
     """
     cmd = ["aws", "sso", "login", "--profile", PROFILE]
-    # プロファイルに region が無いケースに備えて明示的に渡す
     if REGION:
         cmd += ["--region", REGION]
 
-    log_message(f"SSO login start: {' '.join(cmd)}")
+    effective_timeout = timeout if timeout is not None else SSO_LOGIN_TIMEOUT
+    log_message(f"SSO login start: {' '.join(cmd)} (timeout={effective_timeout}s)")
+
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=SSO_LOGIN_TIMEOUT,
         )
-    except subprocess.TimeoutExpired:
-        notify(
-            "SSO ログインがタイムアウトしました",
-            f"{SSO_LOGIN_TIMEOUT}秒以内にログインが完了しませんでした。ネットワークやブラウザを確認してください。"
-        )
-        raise SystemExit(1)
+        deadline = time.time() + effective_timeout
+        stdout_acc = ""
+        stderr_acc = ""
+        while True:
+            token_ok, _ = check_sso_token()
+            if token_ok:
+                log_message("SSO token detected during login; assuming success")
+                if proc.poll() is None:
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                return True
+
+            if proc.poll() is not None:
+                stdout, stderr = proc.communicate()
+                stdout_acc = (stdout or "").strip()
+                stderr_acc = (stderr or "").strip()
+                break
+
+            if time.time() > deadline:
+                proc.kill()
+                stdout, stderr = proc.communicate()
+                stdout_acc = (stdout or "").strip()
+                stderr_acc = (stderr or "").strip()
+                notify(
+                    "SSO ログインがタイムアウトしました",
+                    f"{effective_timeout}秒以内にログインが完了しませんでした。ネットワークやブラウザを確認してください。"
+                )
+                return False
+
+            time.sleep(2)
+
     except FileNotFoundError:
         notify("aws コマンドが見つかりません", "awscli v2 がインストールされているか確認してください。")
-        raise SystemExit(1)
+        return False
     except Exception as e:
         notify("SSO ログインエラー", str(e))
-        raise SystemExit(1)
+        return False
 
-    stdout = (result.stdout or "").strip()
-    stderr = (result.stderr or "").strip()
-
-    if result.returncode != 0:
-        detail = stderr or stdout or "理由不明のエラー"
+    if proc.returncode != 0:
+        detail = stderr_acc or stdout_acc or "理由不明のエラー"
         notify("SSO ログインに失敗しました", f"ネットワークや認証状態を確認してください。\n{detail}")
-        log_message(f"SSO login failed (code {result.returncode}): {detail}")
-        raise SystemExit(result.returncode)
+        log_message(f"SSO login failed (code {proc.returncode}): {detail}")
+        return False
 
     log_message("SSO login succeeded")
-    if stdout:
-        log_message(f"SSO login stdout: {stdout}")
-    if stderr:
-        log_message(f"SSO login stderr: {stderr}")
+    if stdout_acc:
+        log_message(f"SSO login stdout: {stdout_acc}")
+    if stderr_acc:
+        log_message(f"SSO login stderr: {stderr_acc}")
+    return True
+
+
+def initial_sso_login() -> None:
+    """
+    起動時に SSO トークンを確認し、必要ならブラウザログインを実行。
+    """
+    token_ok, remaining = check_sso_token()
+    if token_ok and remaining is not None and remaining > SSO_AUTO_REFRESH_MARGIN:
+        log_message(f"Skip initial SSO login (remaining {remaining:.0f}s)")
+        return
+
+    notify("SSO ログインが必要です", "ブラウザで SSO ログインを開始します。")
+    if not run_sso_login(timeout=SSO_LOGIN_TIMEOUT):
+        raise SystemExit(1)
 
 # ------------------------------------------------------------
 # トレイアプリ本体
@@ -308,9 +349,9 @@ class TrayApp:
         self.indicator.set_menu(menu)
 
         # 状態監視用のフラグ
-        self.warned_5min = False
-        self.warned_1min = False
-        self.warned_expired = False
+        self.auto_refresh_in_progress = False
+        self.notified_token_invalid = False
+        self.notified_tunnel_down = False
 
         # 監視ループを別スレッドで開始
         self._stop_event = threading.Event()
@@ -394,47 +435,55 @@ class TrayApp:
             token_ok, remaining = check_sso_token()
             tunnel_ok = is_port_forward_alive()
 
-            # --- SSO トークンの状態に応じて通知制御 ---
+            # --- SSO トークンの状態に応じて自動リフレッシュ ---
             if token_ok and remaining is not None:
-                # トークン残り時間が大幅に伸びている（= 新しく login した）場合、警告フラグをリセット
-                if remaining > 3600:
-                    self.warned_5min = False
-                    self.warned_1min = False
-                    self.warned_expired = False
-
-                if remaining <= 60 and not self.warned_1min:
-                    notify("AWS SSO 有効期限が 1 分未満です", "aws sso login を実行してトークンを更新してください。")
-                    self.warned_1min = True
-                elif remaining <= 300 and not self.warned_5min:
-                    notify("AWS SSO 有効期限が 5 分未満です", "近いうちに aws sso login を実行することをおすすめします。")
-                    self.warned_5min = True
+                self.notified_token_invalid = False
+                if remaining <= SSO_AUTO_REFRESH_MARGIN and not self.auto_refresh_in_progress:
+                    self.auto_refresh_in_progress = True
+                    threading.Thread(target=self._try_auto_refresh, daemon=True).start()
             else:
-                # トークンが無効
-                if not self.warned_expired:
+                if not self.notified_token_invalid:
                     notify(
                         "AWS SSO トークンが無効です",
-                        "aws sso login を実行して再ログインしてください。\nメニューから SSO ログインページも開けます。"
+                        "ブラウザで SSO ログインを行ってください。"
                     )
-                    self.warned_expired = True
+                    self.notified_token_invalid = True
 
-            # --- アイコン色の決定 ---
-            if not token_ok:
-                # トークン無効 → 赤
-                self.set_icon_color("red")
+            # --- ポートフォワードの状態確認 ---
+            if token_ok and not tunnel_ok:
+                self.set_icon_color("yellow")
+                start_port_forward()
+                self.notified_tunnel_down = False
+            elif token_ok and tunnel_ok:
+                self.set_icon_color("green")
+                self.notified_tunnel_down = False
             else:
-                if tunnel_ok:
-                    # トークン有効かつトンネル生存 → 緑
-                    self.set_icon_color("green")
-                else:
-                    # トークン有効だがトンネルが落ちている → 黄 + 再接続試行
-                    self.set_icon_color("yellow")
-                    start_port_forward()
+                self.set_icon_color("red")
 
-            # 10 秒ごとにチェック（お好みで変更可能）
-            for _ in range(10):
+            # 設定された間隔でチェック
+            for _ in range(TUNNEL_CHECK_INTERVAL):
                 if self._stop_event.is_set():
                     break
                 time.sleep(1)
+
+    # -------------------- SSO 自動更新処理 --------------------
+
+    def _try_auto_refresh(self):
+        """
+        残り時間が少ないときに SSO ログインを実行してトークンを更新する。
+        成功したらトンネルが落ちている場合は再接続する。
+        """
+        success = run_sso_login(timeout=SSO_LOGIN_TIMEOUT)
+        self.auto_refresh_in_progress = False
+        if success:
+            log_message("SSO auto-refresh succeeded")
+            if not is_port_forward_alive():
+                start_port_forward()
+        else:
+            notify(
+                "SSO 再ログインが必要です",
+                "SSO トークンの自動更新に失敗しました。ブラウザで再ログインしてください。"
+            )
 
 # ------------------------------------------------------------
 # エントリーポイント
