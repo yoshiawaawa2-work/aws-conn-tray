@@ -49,6 +49,8 @@ from gi.repository import Gtk, GObject, GLib
 # ------------------------------------------------------------
 
 CONFIG_PATH = os.path.expanduser("~/.config/aws-rds-tray/config.json")
+LOG_DIR = os.path.expanduser("~/.cache/aws-rds-tray")
+LOG_PATH = os.path.join(LOG_DIR, "tray.log")
 
 def load_config():
     """
@@ -81,6 +83,19 @@ ICON_DIR = os.path.join(BASE_DIR, "icons")
 # ユーティリティ関数
 # ------------------------------------------------------------
 
+def log_message(message: str) -> None:
+    """
+    簡易ログを ~/.cache/aws-rds-tray/tray.log に出力する。
+    ログ出力に失敗してもアプリは止めない。
+    """
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        timestamp = datetime.datetime.now().isoformat()
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"{timestamp} {message}\n")
+    except Exception:
+        pass
+
 def notify(title: str, message: str) -> None:
     """
     デスクトップ通知を表示する。
@@ -95,6 +110,8 @@ def notify(title: str, message: str) -> None:
     except FileNotFoundError:
         # notify-send が無い場合は何もしない（ログに出してもよい）
         pass
+    finally:
+        log_message(f"{title}: {message}")
 
 def check_sso_token():
     """
@@ -180,6 +197,58 @@ def is_port_forward_alive() -> bool:
     if ssm_process is None:
         return False
     return ssm_process.poll() is None
+
+# ------------------------------------------------------------
+# 起動時の SSO ログイン
+# ------------------------------------------------------------
+
+def initial_sso_login(timeout_seconds: int = 180) -> None:
+    """
+    アプリ起動時に aws sso login を自動実行する。
+    成功しない場合は通知・ログ出力の上で終了する。
+    """
+    cmd = ["aws", "sso", "login", "--profile", PROFILE]
+    # プロファイルに region が無いケースに備えて明示的に渡す
+    if REGION:
+        cmd += ["--region", REGION]
+
+    log_message(f"SSO login start: {' '.join(cmd)}")
+    try:
+        result = subprocess.run(
+            cmd,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        notify(
+            "SSO ログインがタイムアウトしました",
+            f"{timeout_seconds}秒以内にログインが完了しませんでした。ネットワークやブラウザを確認してください。"
+        )
+        raise SystemExit(1)
+    except FileNotFoundError:
+        notify("aws コマンドが見つかりません", "awscli v2 がインストールされているか確認してください。")
+        raise SystemExit(1)
+    except Exception as e:
+        notify("SSO ログインエラー", str(e))
+        raise SystemExit(1)
+
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
+
+    if result.returncode != 0:
+        detail = stderr or stdout or "理由不明のエラー"
+        notify("SSO ログインに失敗しました", f"ネットワークや認証状態を確認してください。\n{detail}")
+        log_message(f"SSO login failed (code {result.returncode}): {detail}")
+        raise SystemExit(result.returncode)
+
+    log_message("SSO login succeeded")
+    if stdout:
+        log_message(f"SSO login stdout: {stdout}")
+    if stderr:
+        log_message(f"SSO login stderr: {stderr}")
 
 # ------------------------------------------------------------
 # トレイアプリ本体
@@ -359,6 +428,8 @@ class TrayApp:
 # ------------------------------------------------------------
 
 def main():
+    # 起動時に SSO ログインを自動実行し、完了後にトレイアプリを起動する
+    initial_sso_login()
     app = TrayApp()
     Gtk.main()
 
