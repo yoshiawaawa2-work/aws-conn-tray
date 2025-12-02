@@ -71,8 +71,23 @@ def _check_profile_config(profile: str) -> List[str]:
         return issues
 
     section_data = parser[section]
-    if "sso_start_url" not in section_data or "sso_region" not in section_data:
-        issues.append(f"[{section}] に sso_start_url / sso_region が設定されていません。`aws configure sso` を再設定してください。")
+    has_direct_sso = "sso_start_url" in section_data and "sso_region" in section_data
+
+    # sso_session が指定されている場合は [sso-session X] を参照する
+    session_name = section_data.get("sso_session")
+    if session_name:
+        sess_section = f"sso-session {session_name}"
+        if sess_section in parser:
+            sess_data = parser[sess_section]
+            has_session_sso = "sso_start_url" in sess_data and "sso_region" in sess_data
+            if not has_session_sso:
+                issues.append(f"[{sess_section}] に sso_start_url / sso_region が設定されていません。`aws configure sso` を再設定してください。")
+        else:
+            issues.append(f"~/.aws/config に [{sess_section}] が存在しません。`aws configure sso` を確認してください。")
+    else:
+        # sso_session 指定なしの場合はプロファイル内に sso_start_url / sso_region が必要
+        if not has_direct_sso:
+            issues.append(f"[{section}] に sso_start_url / sso_region が設定されていません。`aws configure sso` を再設定してください。")
 
     return issues
 
