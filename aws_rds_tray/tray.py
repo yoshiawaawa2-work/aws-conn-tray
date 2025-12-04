@@ -4,6 +4,15 @@ import time
 from typing import Optional
 
 import gi
+gi.require_version("Gtk", "3.0")
+# AppIndicator は環境によって Ayatana と GNOME の2種類があるためフォールバックする
+try:
+    gi.require_version("AyatanaAppIndicator3", "0.1")
+    from gi.repository import AyatanaAppIndicator3 as AppIndicator
+except (ValueError, ImportError):
+    gi.require_version("AppIndicator3", "0.1")
+    from gi.repository import AppIndicator3 as AppIndicator
+
 from gi.repository import Gtk, GObject, GLib
 
 from .config_loader import Config
@@ -20,10 +29,6 @@ from .sso import (
     LAST_DEVICE_CODE,
 )
 from .ssm import SsmPortForward
-
-gi.require_version("AppIndicator3", "0.1")
-from gi.repository import AppIndicator3 as AppIndicator  # noqa: E402
-
 
 class TrayApp:
     def __init__(self, config: Config):

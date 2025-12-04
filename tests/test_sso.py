@@ -1,5 +1,4 @@
 import os
-import tempfile
 
 from aws_rds_tray import sso
 
