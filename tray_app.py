@@ -32,7 +32,15 @@ import subprocess
 import threading
 import time
 import sys
+import re
+import select
+import os
 from typing import Optional
+try:
+    import pty
+    PTY_AVAILABLE = True
+except ImportError:
+    PTY_AVAILABLE = False
 
 # Gtk / AppIndicator のバージョン指定
 gi.require_version("Gtk", "3.0")
@@ -45,6 +53,14 @@ except (ValueError, ImportError):
     from gi.repository import AppIndicator3 as AppIndicator
 
 from gi.repository import Gtk, GObject, GLib
+
+# WebView (オプション)
+try:
+    gi.require_version("WebKit2", "4.0")
+    from gi.repository import WebKit2
+    WEBKIT_AVAILABLE = True
+except (ValueError, ImportError):
+    WEBKIT_AVAILABLE = False
 
 from app_utils import (
     APP_ROOT,
@@ -108,6 +124,52 @@ def notify(title: str, message: str) -> None:
     finally:
         log_message(f"{title}: {message}")
 
+
+def open_webview_minimized(url: str) -> bool:
+    """
+    WebKit2 が使える場合に、最小化状態の小さな WebView を開く。
+    Gtk メインループ起動後に呼び出すこと。
+    """
+    if not WEBKIT_AVAILABLE:
+        return False
+
+    def _create():
+        window = Gtk.Window()
+        window.set_title("AWS SSO ログイン")
+        window.set_default_size(400, 300)
+        view = WebKit2.WebView()
+        view.load_uri(url)
+        window.add(view)
+        window.show_all()
+        try:
+            window.iconify()
+        except Exception:
+            pass
+        return False
+
+    GLib.idle_add(_create, priority=GLib.PRIORITY_DEFAULT)
+    log_message(f"Open WebView minimized: {url}")
+    return True
+
+
+def is_sso_session_valid() -> bool:
+    """
+    aws sts get-caller-identity を呼び、SSO セッションが有効か簡易判定する。
+    """
+    cmd = ["aws", "sts", "get-caller-identity", "--profile", PROFILE]
+    if REGION:
+        cmd += ["--region", REGION]
+    try:
+        result = subprocess.run(
+            cmd,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 def check_sso_token():
     """
     ~/.aws/sso/cache/*.json のうち、最も新しいファイルを 1 つ選び、
@@ -218,58 +280,56 @@ def ensure_prerequisites():
 # SSO ログイン
 # ------------------------------------------------------------
 
+def _parse_device_flow(text: str) -> (Optional[str], Optional[str]):
+    url = None
+    code = None
+    urls = [m.strip().rstrip(".") for m in re.findall(r"https?://\S+", text)]
+    # authorize を優先、それ以外は最初の URL
+    for u in urls:
+        if "authorize" in u:
+            url = u
+            break
+    if url is None and urls:
+        url = urls[0]
+
+    m = re.search(r"[A-Z0-9]{4}-[A-Z0-9]{4}", text)
+    if m:
+        code = m.group(0)
+    return url, code
+
+
 def run_sso_login(timeout: Optional[int] = None) -> bool:
     """
-    aws sso login を実行し、トークンが有効化されたら True。
-    ブラウザはシステム既定を起動する（最小化などは環境依存のため保証できない）。
+    aws sso login --no-browser を実行し、デバイスフローの URL を取得して埋め込みブラウザ（あれば）で開く。
+    トークンが有効化されたら True。タイムアウトで False。
     """
-    cmd = ["aws", "sso", "login", "--profile", PROFILE]
+    cmd = ["aws", "sso", "login", "--no-browser", "--profile", PROFILE]
     if REGION:
         cmd += ["--region", REGION]
 
     effective_timeout = timeout if timeout is not None else SSO_LOGIN_TIMEOUT
-    log_message(f"SSO login start: {' '.join(cmd)} (timeout={effective_timeout}s)")
+    log_message(f"SSO login start (no-browser): {' '.join(cmd)} (timeout={effective_timeout}s)")
 
     try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        deadline = time.time() + effective_timeout
-        stdout_acc = ""
-        stderr_acc = ""
-        while True:
-            token_ok, _ = check_sso_token()
-            if token_ok:
-                log_message("SSO token detected during login; assuming success")
-                if proc.poll() is None:
-                    try:
-                        proc.terminate()
-                    except Exception:
-                        pass
-                return True
-
-            if proc.poll() is not None:
-                stdout, stderr = proc.communicate()
-                stdout_acc = (stdout or "").strip()
-                stderr_acc = (stderr or "").strip()
-                break
-
-            if time.time() > deadline:
-                proc.kill()
-                stdout, stderr = proc.communicate()
-                stdout_acc = (stdout or "").strip()
-                stderr_acc = (stderr or "").strip()
-                notify(
-                    "SSO ログインがタイムアウトしました",
-                    f"{effective_timeout}秒以内にログインが完了しませんでした。ネットワークやブラウザを確認してください。"
-                )
-                return False
-
-            time.sleep(2)
-
+        if PTY_AVAILABLE:
+            master_fd, slave_fd = pty.openpty()
+            proc = subprocess.Popen(
+                cmd,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                text=False,
+                close_fds=True,
+            )
+            read_fds = [master_fd]
+        else:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            read_fds = [stream for stream in (proc.stdout, proc.stderr) if stream]
     except FileNotFoundError:
         notify("aws コマンドが見つかりません", "awscli v2 がインストールされているか確認してください。")
         return False
@@ -277,17 +337,132 @@ def run_sso_login(timeout: Optional[int] = None) -> bool:
         notify("SSO ログインエラー", str(e))
         return False
 
+    deadline = time.time() + effective_timeout
+    stdout_acc = ""
+    stderr_acc = ""
+    device_url = None
+    code_hint = None
+    url_opened = False
+    fallback_opened = False
+    start_time = time.time()
+
+    while True:
+        if proc.poll() is not None:
+            out, err = proc.communicate()
+            stdout_acc += (out or "")
+            stderr_acc += (err or "")
+            if out:
+                log_message(f"SSO login stdout (final): {out.strip()}")
+            if err:
+                log_message(f"SSO login stderr (final): {err.strip()}")
+            # プロセス終了後の出力からも URL/コードを拾う
+            if not device_url:
+                url, code = _parse_device_flow(stdout_acc + "\n" + stderr_acc)
+                if url:
+                    device_url = url
+                if code and not code_hint:
+                    code_hint = code
+            break
+
+        # 非ブロッキング読み取り
+        ready, _, _ = select.select(read_fds, [], [], 1)
+        for stream in ready:
+            if PTY_AVAILABLE:
+                try:
+                    line_bytes = os.read(stream, 4096)
+                    if not line_bytes:
+                        continue
+                    line = line_bytes.decode(errors="ignore")
+                except OSError:
+                    continue
+            else:
+                line = stream.readline()
+                if not line:
+                    continue
+
+            log_message(f"SSO login stream: {line.strip()}")
+            if PTY_AVAILABLE:
+                stdout_acc += line
+            else:
+                if stream is proc.stdout:
+                    stdout_acc += line
+                else:
+                    stderr_acc += line
+
+            url, code = _parse_device_flow(line)
+            if code and not code_hint:
+                code_hint = code
+            if url and not device_url:
+                device_url = url
+            if device_url and not url_opened:
+                opened = open_webview_minimized(device_url)
+                if not opened:
+                    try:
+                        subprocess.run(["gio", "open", device_url], check=False)
+                    except Exception:
+                        pass
+                notify(
+                    "SSO トークン更新",
+                    f"SSOトークンの有効期限が近づいています。ログイン画面を開きました。コード: {code or code_hint or '---'}"
+                )
+                log_message(f"Opened device URL: {device_url}")
+                url_opened = True
+
+        # フォールバック: 一定時間経過しても device URL が取れない場合は SSO_URL を開く
+        if not url_opened and not fallback_opened and (time.time() - start_time) > 3:
+            opened = open_webview_minimized(device_url or SSO_URL)
+            if not opened:
+                try:
+                    subprocess.run(["gio", "open", device_url or SSO_URL], check=False)
+                except Exception:
+                    pass
+            log_message(f"SSO login fallback: opening {device_url or SSO_URL}")
+            notify(
+                "SSO トークン更新",
+                f"SSOトークンの有効期限が近づいています。ログイン画面を開きました。コード: {code_hint or '---'}"
+            )
+            fallback_opened = True
+
+        token_ok, _ = check_sso_token()
+        if token_ok and is_sso_session_valid():
+            log_message("SSO token detected during login; assuming success")
+            if proc.poll() is None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            return True
+
+        if time.time() > deadline:
+            proc.kill()
+            out, err = proc.communicate()
+            stdout_acc += (out or "")
+            stderr_acc += (err or "")
+            notify(
+                "SSO ログインがタイムアウトしました",
+                f"{effective_timeout}秒以内にログインが完了しませんでした。ネットワークやブラウザを確認してください。"
+            )
+            return False
+
+        time.sleep(1)
+
     if proc.returncode != 0:
-        detail = stderr_acc or stdout_acc or "理由不明のエラー"
+        detail = stderr_acc.strip() or stdout_acc.strip() or "理由不明のエラー"
         notify("SSO ログインに失敗しました", f"ネットワークや認証状態を確認してください。\n{detail}")
         log_message(f"SSO login failed (code {proc.returncode}): {detail}")
         return False
 
+    if not is_sso_session_valid():
+        detail = "STS が失敗しました (セッションが無効の可能性)"
+        notify("SSO ログインに失敗しました", detail)
+        log_message(f"SSO login failed after process success: {detail}")
+        return False
+
     log_message("SSO login succeeded")
-    if stdout_acc:
-        log_message(f"SSO login stdout: {stdout_acc}")
-    if stderr_acc:
-        log_message(f"SSO login stderr: {stderr_acc}")
+    if stdout_acc.strip():
+        log_message(f"SSO login stdout: {stdout_acc.strip()}")
+    if stderr_acc.strip():
+        log_message(f"SSO login stderr: {stderr_acc.strip()}")
     return True
 
 
@@ -352,6 +527,7 @@ class TrayApp:
         self.auto_refresh_in_progress = False
         self.notified_token_invalid = False
         self.notified_tunnel_down = False
+        self.reauth_in_progress = False
 
         # 監視ループを別スレッドで開始
         self._stop_event = threading.Event()
@@ -434,10 +610,15 @@ class TrayApp:
         while not self._stop_event.is_set():
             token_ok, remaining = check_sso_token()
             tunnel_ok = is_port_forward_alive()
+            if token_ok:
+                # トークンファイルは残っていてもセッションが無効化されている場合があるので STS で確認
+                if not is_sso_session_valid():
+                    token_ok = False
 
             # --- SSO トークンの状態に応じて自動リフレッシュ ---
             if token_ok and remaining is not None:
                 self.notified_token_invalid = False
+                self.reauth_in_progress = False
                 if remaining <= SSO_AUTO_REFRESH_MARGIN and not self.auto_refresh_in_progress:
                     self.auto_refresh_in_progress = True
                     threading.Thread(target=self._try_auto_refresh, daemon=True).start()
@@ -448,6 +629,9 @@ class TrayApp:
                         "ブラウザで SSO ログインを行ってください。"
                     )
                     self.notified_token_invalid = True
+                if not self.reauth_in_progress:
+                    self.reauth_in_progress = True
+                    threading.Thread(target=self._force_reauth, daemon=True).start()
 
             # --- ポートフォワードの状態確認 ---
             if token_ok and not tunnel_ok:
@@ -485,6 +669,23 @@ class TrayApp:
                 "SSO トークンの自動更新に失敗しました。ブラウザで再ログインしてください。"
             )
 
+    def _force_reauth(self):
+        """
+        トークン無効時に強制的に再認証を走らせる。
+        成功したらトンネルが落ちている場合は再接続する。
+        """
+        success = run_sso_login(timeout=SSO_LOGIN_TIMEOUT)
+        self.reauth_in_progress = False
+        if success:
+            log_message("SSO re-auth succeeded after token invalid")
+            self.notified_token_invalid = False
+            if not is_port_forward_alive():
+                start_port_forward()
+        else:
+            notify(
+                "SSO 再ログインが必要です",
+                "トークンが無効です。ブラウザで再ログインしてください。"
+            )
 # ------------------------------------------------------------
 # エントリーポイント
 # ------------------------------------------------------------
