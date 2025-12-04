@@ -42,6 +42,10 @@ try:
 except ImportError:
     PTY_AVAILABLE = False
 
+LAST_DEVICE_URL: Optional[str] = None
+LAST_DEVICE_CODE: Optional[str] = None
+LAST_WEBVIEW_WINDOW = None
+
 # Gtk / AppIndicator のバージョン指定
 gi.require_version("Gtk", "3.0")
 # Ubuntu 環境によっては AyatanaAppIndicator3 か AppIndicator3 か異なるため両方を試す
@@ -70,6 +74,7 @@ from app_utils import (
     check_prerequisites,
     log_message,
 )
+SSO_CACHE_PATTERN = os.path.expanduser("~/.aws/sso/cache/*.json")
 
 # ------------------------------------------------------------
 # 設定ファイルの読み込み
@@ -142,7 +147,17 @@ def open_webview_minimized(url: str) -> bool:
         window.add(view)
         window.show_all()
         try:
+            window.set_keep_above(True)
+        except Exception:
+            pass
+        try:
             window.iconify()
+        except Exception:
+            pass
+        global LAST_WEBVIEW_WINDOW
+        LAST_WEBVIEW_WINDOW = window
+        try:
+            window.present_with_time(Gtk.get_current_event_time())
         except Exception:
             pass
         return False
@@ -150,6 +165,17 @@ def open_webview_minimized(url: str) -> bool:
     GLib.idle_add(_create, priority=GLib.PRIORITY_DEFAULT)
     log_message(f"Open WebView minimized: {url}")
     return True
+
+
+def bring_webview_to_front():
+    """最後に開いた WebView を前面に出す。無ければ何もしない。"""
+    global LAST_WEBVIEW_WINDOW
+    try:
+        if LAST_WEBVIEW_WINDOW:
+            LAST_WEBVIEW_WINDOW.present_with_time(Gtk.get_current_event_time())
+            LAST_WEBVIEW_WINDOW.set_keep_above(True)
+    except Exception:
+        pass
 
 
 def is_sso_session_valid() -> bool:
@@ -206,6 +232,10 @@ def check_sso_token():
     now = datetime.datetime.utcnow()
     remaining = (expires_dt - now).total_seconds()
     return remaining > 0, remaining
+
+
+def token_cache_exists() -> bool:
+    return bool(glob.glob(SSO_CACHE_PATTERN))
 
 # ------------------------------------------------------------
 # SSM ポートフォワードの管理
@@ -403,7 +433,7 @@ def run_sso_login(timeout: Optional[int] = None) -> bool:
                         pass
                 notify(
                     "SSO トークン更新",
-                    f"SSOトークンの有効期限が近づいています。ログイン画面を開きました。コード: {code or code_hint or '---'}"
+                    f"SSO トークンを更新するためログイン画面を開きました。コード: {code or code_hint or '---'}"
                 )
                 log_message(f"Opened device URL: {device_url}")
                 url_opened = True
@@ -419,7 +449,7 @@ def run_sso_login(timeout: Optional[int] = None) -> bool:
             log_message(f"SSO login fallback: opening {device_url or SSO_URL}")
             notify(
                 "SSO トークン更新",
-                f"SSOトークンの有効期限が近づいています。ログイン画面を開きました。コード: {code_hint or '---'}"
+                f"SSO トークンを更新するためログイン画面を開きました。コード: {code_hint or '---'}"
             )
             fallback_opened = True
 
@@ -459,6 +489,11 @@ def run_sso_login(timeout: Optional[int] = None) -> bool:
         return False
 
     log_message("SSO login succeeded")
+    global LAST_DEVICE_URL, LAST_DEVICE_CODE
+    if device_url:
+        LAST_DEVICE_URL = device_url
+    if code_hint:
+        LAST_DEVICE_CODE = code_hint
     if stdout_acc.strip():
         log_message(f"SSO login stdout: {stdout_acc.strip()}")
     if stderr_acc.strip():
@@ -469,14 +504,25 @@ def run_sso_login(timeout: Optional[int] = None) -> bool:
 def initial_sso_login() -> None:
     """
     起動時に SSO トークンを確認し、必要ならブラウザログインを実行。
+    トークンが無ければ必ず実行し、成功しなければ終了。
     """
     token_ok, remaining = check_sso_token()
-    if token_ok and remaining is not None and remaining > SSO_AUTO_REFRESH_MARGIN:
+    session_ok = token_ok and is_sso_session_valid()
+
+    if token_ok and session_ok and remaining is not None and remaining > SSO_AUTO_REFRESH_MARGIN:
         log_message(f"Skip initial SSO login (remaining {remaining:.0f}s)")
         return
 
+    # トークンが無い、またはセッション無効なら認可画面を前面で開く
+    if not session_ok:
+        global LAST_DEVICE_URL, LAST_DEVICE_CODE
+        LAST_DEVICE_URL = SSO_URL
+        open_webview_minimized(SSO_URL)
+        bring_webview_to_front()
+
     notify("SSO ログインが必要です", "ブラウザで SSO ログインを開始します。")
     if not run_sso_login(timeout=SSO_LOGIN_TIMEOUT):
+        notify("SSO ログインに失敗しました", "トークンを取得できませんでした。ネットワークや認証情報を確認してください。")
         raise SystemExit(1)
 
 # ------------------------------------------------------------
@@ -528,6 +574,9 @@ class TrayApp:
         self.notified_token_invalid = False
         self.notified_tunnel_down = False
         self.reauth_in_progress = False
+        self.last_device_url = None
+        self.last_device_code = None
+        self.initial_cache_missing = not token_cache_exists()
 
         # 監視ループを別スレッドで開始
         self._stop_event = threading.Event()
@@ -619,15 +668,24 @@ class TrayApp:
             if token_ok and remaining is not None:
                 self.notified_token_invalid = False
                 self.reauth_in_progress = False
+                self.initial_cache_missing = False
                 if remaining <= SSO_AUTO_REFRESH_MARGIN and not self.auto_refresh_in_progress:
                     self.auto_refresh_in_progress = True
                     threading.Thread(target=self._try_auto_refresh, daemon=True).start()
             else:
                 if not self.notified_token_invalid:
-                    notify(
-                        "AWS SSO トークンが無効です",
-                        "ブラウザで SSO ログインを行ってください。"
-                    )
+                    msg = "ブラウザで SSO ログインを行ってください。"
+                    if self.initial_cache_missing:
+                        msg = "ここをクリックして SSO ログインを行ってください。"
+                    opened = open_webview_minimized(LAST_DEVICE_URL or SSO_URL)
+                    if not opened:
+                        try:
+                            subprocess.run(["gio", "open", LAST_DEVICE_URL or SSO_URL], check=False)
+                        except Exception:
+                            pass
+                    bring_webview_to_front()
+                    notify("AWS SSO トークンが無効です", msg)
+                    bring_webview_to_front()
                     self.notified_token_invalid = True
                 if not self.reauth_in_progress:
                     self.reauth_in_progress = True
@@ -691,10 +749,10 @@ class TrayApp:
 # ------------------------------------------------------------
 
 def main():
-    # OS と前提条件を確認し、SSO ログインを自動実行してからトレイアプリを起動する
+    # OS を確認し、SSO ログインを実行してから前提条件チェック・トレイ起動
     ensure_supported_os()
-    ensure_prerequisites()
     initial_sso_login()
+    ensure_prerequisites()
     app = TrayApp()
     Gtk.main()
 
