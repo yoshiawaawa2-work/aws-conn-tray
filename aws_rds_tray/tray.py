@@ -75,7 +75,15 @@ class TrayApp:
         menu.append(quit_item)
 
         menu.show_all()
+        self.menu = menu
         self.indicator.set_menu(menu)
+        # 設定ダイアログ中に使う空メニュー（クリック無効化用）
+        self.disabled_menu = Gtk.Menu()
+        self.disabled_menu.set_sensitive(False)
+        self.disabled_menu.show_all()
+        self.settings_dialog_open = False
+        # 設定ダイアログ中はメニューを無効化するためのフラグを Indicator 側でも参照できるようにする
+        self.indicator.set_secondary_activate_target(None)
 
         self.auto_refresh_in_progress = False
         self.notified_token_invalid = False
@@ -98,7 +106,14 @@ class TrayApp:
         defaults = _load_example_config()
         current = _config_to_dict(self.config)
 
-        dialog = Gtk.Dialog(title="設定", transient_for=None, flags=0)
+        # 設定ダイアログ中はメニューを無効化
+        if hasattr(self, "menu"):
+            self.menu.set_sensitive(False)
+            # アイコンクリック時のメニュー表示も無効化
+            self.indicator.set_menu(self.disabled_menu)
+        self.settings_dialog_open = True
+
+        dialog = Gtk.Dialog(title="設定", transient_for=None, flags=Gtk.DialogFlags.MODAL)
         dialog.add_button("キャンセル", Gtk.ResponseType.CANCEL)
         dialog.add_button("OK", Gtk.ResponseType.OK)
         content = dialog.get_content_area()
@@ -106,6 +121,34 @@ class TrayApp:
         content.add(grid)
 
         entries: Dict[str, Gtk.Entry] = {}
+
+        # 上部中央に「アプリ終了」ボタンを配置し、その下に区切り線を入れる
+        top_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        quit_btn = Gtk.Button(label="アプリ終了")
+        quit_btn.set_relief(Gtk.ReliefStyle.NORMAL)
+        quit_btn.connect("clicked", lambda _b, dlg=None: (_b.get_toplevel().destroy() if _b.get_toplevel() else None) or Gtk.main_quit())
+        quit_btn.set_name("quit-button")
+        # 強調スタイル: 赤背景＋太字（Gtkテーマに依存しない簡易指定）
+        css_provider = Gtk.CssProvider()
+        css_provider.load_from_data(b"""
+            #quit-button {
+                background: #cc0000;
+                color: #ffffff;
+                font-weight: bold;
+                font-size: 14px;
+                padding: 2px 6px;
+            }
+        """)
+        style_context = quit_btn.get_style_context()
+        style_context.add_provider(css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        quit_btn.set_halign(Gtk.Align.START)
+        top_bar.pack_start(quit_btn, False, False, 0)
+        top_bar.pack_start(Gtk.Label(), True, True, 0)  # 右余白
+        top_bar.show_all()
+        grid.attach(top_bar, 0, 0, 3, 1)
+
+        sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        grid.attach(sep, 0, 1, 3, 1)
 
         def add_text_row(row, key, label_text, with_paste=False):
             label = Gtk.Label(label=label_text, halign=Gtk.Align.START)
@@ -132,7 +175,7 @@ class TrayApp:
             grid.attach(btn, 2, row, 1, 1)
             return row + 1
 
-        row = 0
+        row = 2  # 0: アプリ終了ボタン, 1: 区切り, 2から項目開始
         row = add_text_row(row, "instance_id", "instance_id", with_paste=True)
         row = add_text_row(row, "profile", "profile", with_paste=True)
         row = add_text_row(row, "region", "region", with_paste=True)
@@ -146,6 +189,11 @@ class TrayApp:
         row = add_int_row(row, "tunnel_check_interval_seconds", "tunnel_check_interval_seconds")
 
         dialog.show_all()
+        try:
+            dialog.set_keep_above(True)
+            dialog.present()
+        except Exception:
+            pass
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
             new_data = {k: entries[k].get_text().strip() for k in entries}
@@ -174,6 +222,11 @@ class TrayApp:
                 dialog.destroy()
         else:
             dialog.destroy()
+        self.settings_dialog_open = False
+        if hasattr(self, "menu"):
+            self.menu.set_sensitive(True)
+            # メニューを戻す
+            self.indicator.set_menu(self.menu)
 
     def on_reconnect_clicked(self, _menu_item):
         if self.ssm.is_alive():
