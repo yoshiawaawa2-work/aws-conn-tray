@@ -33,3 +33,18 @@ def test_is_sso_session_valid(monkeypatch):
     monkeypatch.setattr(sso.subprocess, "run", fake_run)
     assert sso.is_sso_session_valid("prof", "reg")
     assert "prof" in called["cmd"]
+
+
+def test_start_sso_login_browser(monkeypatch):
+    called = {}
+
+    class DummyPopen:
+        def __init__(self, cmd):
+            called["cmd"] = cmd
+
+    monkeypatch.setattr(sso.subprocess, "Popen", DummyPopen)
+
+    ok = sso.start_sso_login_browser("profA", "regionB")
+    assert ok is True
+    assert called["cmd"][0:4] == ["aws", "sso", "login", "--profile"]
+    assert "profA" in called["cmd"]

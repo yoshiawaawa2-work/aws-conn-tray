@@ -22,6 +22,7 @@ from .sso import (
     check_sso_token,
     is_sso_session_valid,
     run_sso_login,
+    start_sso_login_browser,
     token_cache_exists,
     open_webview_minimized,
     bring_webview_to_front,
@@ -50,8 +51,8 @@ class TrayApp:
         self.indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
 
         menu = Gtk.Menu()
-        open_sso_item = Gtk.MenuItem.new_with_label("SSO ログインページを開く")
-        open_sso_item.connect("activate", self.on_open_sso_clicked)
+        open_sso_item = Gtk.MenuItem.new_with_label("SSO ログイン")
+        open_sso_item.connect("activate", self.on_sso_login_clicked)
         menu.append(open_sso_item)
 
         reconnect_item = Gtk.MenuItem.new_with_label("ポートフォワード再接続")
@@ -77,16 +78,13 @@ class TrayApp:
         self.thread = threading.Thread(target=self.monitor_loop, daemon=True)
         self.thread.start()
 
-    def on_open_sso_clicked(self, _menu_item):
-        opened = open_webview_minimized(LAST_DEVICE_URL or self.config.sso_start_url)
-        if not opened:
-            try:
-                import subprocess
-
-                subprocess.run(["gio", "open", LAST_DEVICE_URL or self.config.sso_start_url], check=False)
-            except Exception:
-                pass
-        bring_webview_to_front()
+    def on_sso_login_clicked(self, _menu_item):
+        def worker():
+            notify("SSO ログイン", "ブラウザで SSO ログインを開始します。")
+            started = start_sso_login_browser(self.config.profile, self.config.region)
+            if not started:
+                notify("SSO ログインエラー", "aws コマンドまたはネットワークを確認してください。")
+        threading.Thread(target=worker, daemon=True).start()
 
     def on_reconnect_clicked(self, _menu_item):
         if self.ssm.is_alive():
