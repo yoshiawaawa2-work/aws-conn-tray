@@ -1,10 +1,14 @@
+import json
 import os
+import sys
+import subprocess
 import threading
 import time
-from typing import Optional
+from typing import Optional, Dict, Any
 
 import gi
 gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
 # AppIndicator は環境によって Ayatana と GNOME の2種類があるためフォールバックする
 try:
     gi.require_version("AyatanaAppIndicator3", "0.1")
@@ -13,11 +17,11 @@ except (ValueError, ImportError):
     gi.require_version("AppIndicator3", "0.1")
     from gi.repository import AppIndicator3 as AppIndicator
 
-from gi.repository import Gtk, GObject, GLib
+from gi.repository import Gtk, GObject, GLib, Gdk
 
 from .config_loader import Config
 from .logger import notify, log_message
-from .paths import ICON_DIR
+from .paths import ICON_DIR, CONFIG_PATH, CONFIG_EXAMPLE_PATH, APP_ROOT
 from .sso import (
     check_sso_token,
     is_sso_session_valid,
@@ -51,6 +55,10 @@ class TrayApp:
         self.indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
 
         menu = Gtk.Menu()
+        settings_item = Gtk.MenuItem.new_with_label("⚙️ 設定")
+        settings_item.connect("activate", self.on_settings_clicked)
+        menu.append(settings_item)
+
         open_sso_item = Gtk.MenuItem.new_with_label("SSO ログイン")
         open_sso_item.connect("activate", self.on_sso_login_clicked)
         menu.append(open_sso_item)
@@ -85,6 +93,87 @@ class TrayApp:
             if not started:
                 notify("SSO ログインエラー", "aws コマンドまたはネットワークを確認してください。")
         threading.Thread(target=worker, daemon=True).start()
+
+    def on_settings_clicked(self, _menu_item):
+        defaults = _load_example_config()
+        current = _config_to_dict(self.config)
+
+        dialog = Gtk.Dialog(title="設定", transient_for=None, flags=0)
+        dialog.add_button("キャンセル", Gtk.ResponseType.CANCEL)
+        dialog.add_button("OK", Gtk.ResponseType.OK)
+        content = dialog.get_content_area()
+        grid = Gtk.Grid(column_spacing=6, row_spacing=6, margin=12)
+        content.add(grid)
+
+        entries: Dict[str, Gtk.Entry] = {}
+
+        def add_text_row(row, key, label_text, with_paste=False):
+            label = Gtk.Label(label=label_text, halign=Gtk.Align.START)
+            entry = Gtk.Entry()
+            entry.set_text(str(current.get(key, "")))
+            entries[key] = entry
+            grid.attach(label, 0, row, 1, 1)
+            grid.attach(entry, 1, row, 1, 1)
+            if with_paste:
+                btn = Gtk.Button(label="ペースト")
+                btn.connect("clicked", lambda _b: _paste_to_entry(entry))
+                grid.attach(btn, 2, row, 1, 1)
+            return row + 1
+
+        def add_int_row(row, key, label_text):
+            label = Gtk.Label(label=label_text, halign=Gtk.Align.START)
+            entry = Gtk.Entry()
+            entry.set_text(str(current.get(key, defaults.get(key, 0))))
+            entries[key] = entry
+            grid.attach(label, 0, row, 1, 1)
+            grid.attach(entry, 1, row, 1, 1)
+            btn = Gtk.Button(label="デフォルトに戻す")
+            btn.connect("clicked", lambda _b: entry.set_text(str(defaults.get(key, ""))))
+            grid.attach(btn, 2, row, 1, 1)
+            return row + 1
+
+        row = 0
+        row = add_text_row(row, "instance_id", "instance_id", with_paste=True)
+        row = add_text_row(row, "profile", "profile", with_paste=True)
+        row = add_text_row(row, "region", "region", with_paste=True)
+        row = add_text_row(row, "remote_host", "remote_host", with_paste=True)
+        row = add_text_row(row, "sso_start_url", "sso_start_url", with_paste=True)
+
+        row = add_int_row(row, "local_port", "local_port")
+        row = add_int_row(row, "remote_port", "remote_port")
+        row = add_int_row(row, "sso_login_timeout_seconds", "sso_login_timeout_seconds")
+        row = add_int_row(row, "sso_auto_refresh_margin_seconds", "sso_auto_refresh_margin_seconds")
+        row = add_int_row(row, "tunnel_check_interval_seconds", "tunnel_check_interval_seconds")
+
+        dialog.show_all()
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            new_data = {k: entries[k].get_text().strip() for k in entries}
+            valid, errors, parsed = validate_config_input(new_data, defaults)
+            if not valid:
+                msg = "\n".join(errors)
+                m = Gtk.MessageDialog(
+                    transient_for=dialog,
+                    flags=0,
+                    message_type=Gtk.MessageType.ERROR,
+                    buttons=Gtk.ButtonsType.OK,
+                    text="入力エラーがあります。",
+                )
+                m.format_secondary_text(msg)
+                m.run()
+                m.destroy()
+            else:
+                if parsed != current:
+                    _save_config(parsed)
+                    notify("設定を保存しました", "アプリを再起動します。")
+                    try:
+                        subprocess.Popen([sys.executable, os.path.join(APP_ROOT, "tray_app.py")])
+                    except Exception:
+                        pass
+                    Gtk.main_quit()
+                dialog.destroy()
+        else:
+            dialog.destroy()
 
     def on_reconnect_clicked(self, _menu_item):
         if self.ssm.is_alive():
@@ -178,3 +267,73 @@ class TrayApp:
             self.notified_token_invalid = False
             if not self.ssm.is_alive():
                 self.ssm.start()
+
+
+def _paste_to_entry(entry: Gtk.Entry):
+    clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+    text = clipboard.wait_for_text()
+    if text:
+        entry.set_text(text.strip())
+
+
+def _load_example_config() -> Dict[str, Any]:
+    try:
+        with open(CONFIG_EXAMPLE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _config_to_dict(cfg: Config) -> Dict[str, Any]:
+    return {
+        "instance_id": cfg.instance_id,
+        "profile": cfg.profile,
+        "region": cfg.region,
+        "local_port": cfg.local_port,
+        "remote_host": cfg.remote_host,
+        "remote_port": cfg.remote_port,
+        "sso_start_url": cfg.sso_start_url,
+        "sso_login_timeout_seconds": cfg.sso_login_timeout_seconds,
+        "sso_auto_refresh_margin_seconds": cfg.sso_auto_refresh_margin_seconds,
+        "tunnel_check_interval_seconds": cfg.tunnel_check_interval_seconds,
+    }
+
+
+def validate_config_input(data: Dict[str, str], defaults: Dict[str, Any]):
+    errors = []
+    parsed: Dict[str, Any] = {}
+
+    for key in ["instance_id", "profile", "region", "remote_host", "sso_start_url"]:
+        value = data.get(key, "").strip()
+        if not value:
+            errors.append(f"{key}: 必須項目です。")
+        parsed[key] = value
+
+    for key in [
+        "local_port",
+        "remote_port",
+        "sso_login_timeout_seconds",
+        "sso_auto_refresh_margin_seconds",
+        "tunnel_check_interval_seconds",
+    ]:
+        raw = data.get(key, "").strip()
+        try:
+            num = int(raw)
+            if num < 0:
+                raise ValueError()
+            parsed[key] = num
+        except Exception:
+            default_val = defaults.get(key, "")
+            errors.append(f"{key}: 0以上の整数を入力してください。（デフォルト: {default_val}）")
+
+    return len(errors) == 0, errors, parsed
+
+
+def _save_config(new_data: Dict[str, Any]):
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(new_data, f, ensure_ascii=False, indent=2)
+        log_message("config.json を更新しました。")
+    except Exception as e:
+        notify("設定保存に失敗しました", str(e))
+        log_message(f"Failed to save config: {e}")
