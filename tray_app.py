@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import sys
 
 import gi
@@ -38,6 +39,20 @@ def ensure_initial_login(config) -> bool:
 
 
 def main():
+    """
+    GUI バックエンド切り替え: 環境変数 AWS_RDS_TRAY_GUI=wx で wxPython 版、
+    それ以外は従来の GTK 版。
+    """
+    backend = os.environ.get("AWS_RDS_TRAY_GUI", "gtk").lower()
+    if backend == "wx":
+        try:
+            from aws_rds_tray.wx_tray import run_wx_app
+        except Exception as e:
+            notify("wx バックエンド起動失敗", f"wxPython を読み込めません: {e}")
+            sys.exit(1)
+        run_wx_app()
+        return
+
     ensure_supported_os()
     config = load_config()
 
