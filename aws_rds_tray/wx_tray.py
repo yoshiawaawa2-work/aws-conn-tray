@@ -1,10 +1,11 @@
-from typing import Callable, Optional, Dict, Any
+from typing import Callable, Optional, Dict, Any, Tuple
 import os
 import threading
 import webbrowser
 import json
 import subprocess
 import sys
+import re
 
 try:
     import wx
@@ -128,6 +129,9 @@ class WxTrayApp:
         self.config: Optional[Config] = None
         self.ssm: Optional[SsmPortForward] = None
         self.timer: Optional[wx.Timer] = None
+        self._refreshing = False
+        self._notified_invalid = False
+        self._last_webview_frame: Optional[wx.Frame] = None
 
     def OnInit(self):
         return True
@@ -200,16 +204,67 @@ class WxTrayApp:
         tunnel_ok = self.ssm.is_alive() if self.ssm else False
         log_message(f"[wx-monitor] token_ok={token_ok} remaining={remaining} tunnel_ok={tunnel_ok}")
 
+        # 期限内かつ margin 以内なら自動更新を試みる
+        if token_ok and remaining is not None:
+            if remaining <= self.config.sso_auto_refresh_margin_seconds:
+                if not self._refreshing:
+                    self._refreshing = True
+                    self._start_sso_refresh()
+            else:
+                # 余裕があればリセット
+                self._refreshing = False
+
         if token_ok:
+            self._notified_invalid = False
             if not tunnel_ok and self.ssm:
                 self.tray_icon.set_icon_color("yellow")
                 self.ssm.start()
             elif tunnel_ok:
                 self.tray_icon.set_icon_color("green")
         else:
-            # トークン無効時はブラウザログインを案内
-            start_sso_login_browser(self.config.profile, self.config.region)
+            # トークン無効時は通知＋ブラウザログイン導線
+            if not self._notified_invalid:
+                notify(
+                    "SSO トークンが無効です",
+                    "ここをクリックして SSO ログインしてください。",
+                    on_click=lambda: self.on_sso_login(),
+                )
+                log_message("[wx-monitor] token invalid, prompting login")
+                self._notified_invalid = True
             self.tray_icon.set_icon_color("red")
+
+    def _start_sso_refresh(self):
+        """
+        マージン内で自動リフレッシュを試みる。スレッドで実行。
+        """
+
+        def worker():
+            try:
+                url, code = _fetch_authorize_url(
+                    self.config.profile,
+                    self.config.region,
+                    self.config.sso_start_url,
+                    timeout=self.config.sso_login_timeout_seconds,
+                )
+                if url:
+                    ok = start_sso_login_webview(url)
+                    if not ok:
+                        notify(
+                            "SSO トークン更新",
+                            "認可画面を開けませんでした。ここをクリックしてブラウザでログインしてください。",
+                            on_click=lambda: self.on_sso_login(),
+                        )
+                else:
+                    notify(
+                        "SSO トークン更新",
+                        "認可URLを取得できませんでした。ここをクリックしてブラウザでログインしてください。",
+                        on_click=lambda: self.on_sso_login(),
+                    )
+            finally:
+                self._refreshing = False
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
 
     # ===== メニュー操作ハンドラ =====
     def on_settings(self):
@@ -233,6 +288,8 @@ class WxTrayApp:
 
     def on_sso_login(self):
         start_sso_login_browser(self.config.profile, self.config.region)
+        self._refreshing = False
+        self._notified_invalid = False
 
     def on_reconnect(self):
         if self.ssm and not self.ssm.is_alive():
@@ -307,6 +364,16 @@ def open_webview_authorize(url: str) -> bool:
         frame = wx.Frame(None, title="AWS SSO ログイン", size=(800, 600))
         browser = wx.html2.WebView.New(frame)
         browser.LoadURL(url)
+
+        def on_title(evt):
+            title = evt.GetString()
+            if "Request approved" in title:
+                try:
+                    frame.Destroy()
+                except Exception:
+                    pass
+
+        browser.Bind(wx.html2.EVT_WEBVIEW_TITLE_CHANGED, on_title)
         frame.Show()
         return True
     except Exception as e:
@@ -410,3 +477,49 @@ def _save_config(data: Dict[str, Any]):
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# ===== SSO 認可URL取得（ブラウザ開き専用の軽量版） =====
+
+
+def _parse_authorize_url(text: str) -> Tuple[Optional[str], Optional[str]]:
+    url = None
+    code = None
+    urls = [m.strip().rstrip(".") for m in re.findall(r"https?://\S+", text)]
+    for u in urls:
+        if "authorize" in u:
+            url = u
+            break
+    if url is None and urls:
+        url = urls[0]
+    m = re.search(r"[A-Z0-9]{4}-[A-Z0-9]{4}", text)
+    if m:
+        code = m.group(0)
+    return url, code
+
+
+def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout: int) -> Tuple[Optional[str], Optional[str]]:
+    """
+    aws sso login --no-browser を実行し、認可URLとコードを抽出する（GUI非依存）。
+    """
+    cmd = ["aws", "sso", "login", "--no-browser", "--profile", profile]
+    if region:
+        cmd += ["--region", region]
+    try:
+        proc = subprocess.run(
+            cmd,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=max(10, min(timeout, 120)),
+        )
+    except Exception as e:
+        log_message(f"[wx-auth-url] failed to run aws sso login: {e}")
+        return None, None
+
+    combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    url, code = _parse_authorize_url(combined)
+    if not url:
+        url = sso_start_url
+    return url, code

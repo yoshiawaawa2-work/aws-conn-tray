@@ -91,3 +91,10 @@ def test_start_sso_login_webview_fallback(monkeypatch):
     assert ok is True
     assert called.get("opened") == "https://example.com/auth"
     assert called.get("notify")[0] == "SSO ログイン"
+
+
+def test_parse_authorize_url():
+    text = "Please visit: https://oidc.example.com/authorize?code=ABC\nYour code is 1A2B-3C4D."
+    url, code = wx_tray._parse_authorize_url(text)
+    assert "authorize" in url
+    assert code == "1A2B-3C4D"
