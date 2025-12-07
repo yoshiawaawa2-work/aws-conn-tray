@@ -29,12 +29,6 @@ def log_message(message: str) -> None:
 
 
 def notify(title: str, message: str, on_click: Optional[Callable[[], None]] = None) -> None:
-    # on_click は通知アクション非対応環境でも確実に実行するため先に呼ぶ
-    if on_click:
-        try:
-            on_click()
-        except Exception:
-            pass
     try:
         if NOTIFY_AVAILABLE:
             n = Notify.Notification.new(title, message, None)
@@ -44,7 +38,8 @@ def notify(title: str, message: str, on_click: Optional[Callable[[], None]] = No
                 if "actions" in caps:
                     n.add_action("default", "open", lambda _n, _a: on_click())
                 else:
-                    pass
+                    # アクション非対応の場合は何もしない（自動実行もしない）
+                    log_message("notify: actions not supported; on_clickは実行されませんでした")
             n.show()
         else:
             raise RuntimeError("notify-unavailable")
