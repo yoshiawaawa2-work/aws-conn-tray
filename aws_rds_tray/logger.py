@@ -6,10 +6,20 @@ import gi
 
 from .paths import LOG_DIR, LOG_PATH
 
-gi.require_version("Notify", "0.7")
-from gi.repository import Notify  # noqa: E402
-
+# wx が使える場合は wx 側の通知を優先（GLib ループ不要でクロスプラットフォーム）
 try:
+    import wx
+    import wx.adv
+
+    WX_AVAILABLE = True
+except Exception:
+    WX_AVAILABLE = False
+
+# GTK Notify は従来どおりフォールバックとして使用
+try:
+    gi.require_version("Notify", "0.7")
+    from gi.repository import Notify  # noqa: E402
+
     Notify.init("aws-rds-tray")
     NOTIFY_AVAILABLE = True
 except Exception:
@@ -30,7 +40,21 @@ def log_message(message: str) -> None:
 
 def notify(title: str, message: str, on_click: Optional[Callable[[], None]] = None) -> None:
     try:
-        if NOTIFY_AVAILABLE:
+        # wx が利用でき、かつ wx.App が存在するなら wx の NotificationMessage を優先
+        if WX_AVAILABLE and wx.GetApp() is not None:
+            parent = wx.GetApp().GetTopWindow()
+            # 親が無い場合は通知クリックを捕捉できないので on_click は実行しない
+            msg = wx.adv.NotificationMessage(title, message, parent=parent)
+            if on_click and parent:
+                def handler(evt):
+                    try:
+                        on_click()
+                    except Exception:
+                        pass
+                    parent.Unbind(wx.adv.EVT_NOTIFICATION_MESSAGE_CLICKED, handler)
+                parent.Bind(wx.adv.EVT_NOTIFICATION_MESSAGE_CLICKED, handler)
+            msg.Show()
+        elif NOTIFY_AVAILABLE:
             n = Notify.Notification.new(title, message, None)
             if on_click:
                 # 通知サーバがアクションをサポートするか確認（XFCE などは非対応の場合あり）
