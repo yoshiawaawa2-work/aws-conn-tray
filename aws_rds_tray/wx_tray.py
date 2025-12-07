@@ -129,6 +129,10 @@ class WxTrayApp:
         if not _has_display():
             raise RuntimeError("DISPLAY が利用できません。GUI 環境で実行してください。")
         self._app = wx.App(clearSigInt=False)
+        # Top-level が無いとすぐ終了する環境があるため、ダミーフレームで維持
+        self._app.SetExitOnFrameDelete(False)
+        self._frame = wx.Frame(None)
+        self._frame.Hide()
         self.tray_icon: Optional[WxTrayIcon] = None
         self.config: Optional[Config] = None
         self.ssm: Optional[SsmPortForward] = None
@@ -157,7 +161,7 @@ class WxTrayApp:
         callbacks.setdefault("reconnect", self.on_reconnect)
         callbacks.setdefault("quit", self.on_quit)
         self.tray_icon = WxTrayIcon(
-            parent=None,
+            parent=self._frame,
             on_settings=callbacks.get("settings"),
             on_sso_login=callbacks.get("sso_login"),
             on_reconnect=callbacks.get("reconnect"),
@@ -187,6 +191,11 @@ class WxTrayApp:
         if self.tray_icon:
             try:
                 self.tray_icon.Destroy()
+            except Exception:
+                pass
+        if hasattr(self, "_frame") and self._frame:
+            try:
+                self._frame.Destroy()
             except Exception:
                 pass
         if self.timer:
