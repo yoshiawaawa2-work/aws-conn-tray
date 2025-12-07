@@ -35,6 +35,7 @@ def notify(title: str, message: str, on_click: Optional[Callable[[], None]] = No
             if on_click:
                 # 通知サーバがアクションをサポートするか確認（XFCE などは非対応の場合あり）
                 caps = set(Notify.get_server_caps() or [])
+                log_message(f"notify: server caps={caps}")
                 if "actions" in caps:
                     n.add_action("default", "open", lambda _n, _a: on_click())
                 else:
