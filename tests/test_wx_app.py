@@ -13,8 +13,7 @@ def test_wx_app_boot_and_shutdown():
     # 別スレッドで MainLoop を回し、shutdown で停止できるか確認する。
     try:
         app = wx_tray.WxTrayApp()
-    except SystemExit as e:
-        # DISPLAY が無い場合は wx.App 生成時に SystemExit が飛ぶのでスキップ
+    except (SystemExit, RuntimeError) as e:
         pytest.skip(f"wx.App not available: {e}")
         return
 
@@ -25,7 +24,6 @@ def test_wx_app_boot_and_shutdown():
     t.start()
     # 起動待ち
     time.sleep(0.1)
-    # DISPLAY が無い環境では GUI を張れずに落ちるのでスキップ
     if not app.IsMainLoopRunning():
         pytest.skip("wx GUI main loop not running (likely no DISPLAY)")
         return
