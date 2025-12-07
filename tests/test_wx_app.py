@@ -2,6 +2,7 @@ import threading
 import time
 
 import importlib.util
+import os
 
 import pytest
 
@@ -10,12 +11,12 @@ from aws_rds_tray import wx_tray
 
 @pytest.mark.skipif(importlib.util.find_spec("wx") is None, reason="wxPython not installed")
 def test_wx_app_boot_and_shutdown():
+    if not os.environ.get("WX_GUI_TEST"):
+        pytest.skip("Set WX_GUI_TEST=1 to run wx GUI loop test")
+    if not wx_tray._has_display():
+        pytest.skip("DISPLAY not available")
     # 別スレッドで MainLoop を回し、shutdown で停止できるか確認する。
-    try:
-        app = wx_tray.WxTrayApp()
-    except (SystemExit, RuntimeError) as e:
-        pytest.skip(f"wx.App not available: {e}")
-        return
+    app = wx_tray.WxTrayApp()
 
     def run():
         app.MainLoop()
