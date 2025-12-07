@@ -1,4 +1,5 @@
 import importlib.util
+import types
 
 import pytest
 
@@ -71,3 +72,22 @@ def test_monitor_starts_ssm_when_token_ok(monkeypatch):
     app.monitor_once()
     assert calls["ssm_start"] == 1
     assert "yellow" in calls["icon"] or "green" in calls["icon"]
+
+
+def test_start_sso_login_webview_fallback(monkeypatch):
+    # open_webview_authorize が False を返した場合にブラウザフォールバックと通知が呼ばれるか
+    called = {}
+    monkeypatch.setattr(wx_tray, "open_webview_authorize", lambda url: False)
+    monkeypatch.setattr(wx_tray, "webbrowser", types.SimpleNamespace(open=lambda url: called.setdefault("opened", url)))
+
+    def fake_notify(title, message, on_click=None):
+        called["notify"] = (title, message)
+        if on_click:
+            on_click()
+
+    monkeypatch.setattr(wx_tray, "notify", fake_notify)
+
+    ok = wx_tray.start_sso_login_webview("https://example.com/auth")
+    assert ok is True
+    assert called.get("opened") == "https://example.com/auth"
+    assert called.get("notify")[0] == "SSO ログイン"

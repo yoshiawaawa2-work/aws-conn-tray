@@ -11,7 +11,7 @@ except ImportError:
     wx = None
 
 from .paths import ICON_DIR
-from .logger import log_message
+from .logger import log_message, notify
 from .config_loader import Config, load_config
 from .sso import check_sso_token, is_sso_session_valid, start_sso_login_browser
 from .ssm import SsmPortForward
@@ -222,6 +222,11 @@ def start_sso_login_webview(url: str) -> bool:
     if open_webview_authorize(url):
         return True
     try:
+        notify(
+            "SSO ログイン",
+            "ブラウザで SSO ログインを開始します。",
+            on_click=lambda: webbrowser.open(url),
+        )
         webbrowser.open(url)
         return True
     except Exception as e:
