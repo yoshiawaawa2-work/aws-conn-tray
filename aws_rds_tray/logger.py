@@ -45,14 +45,21 @@ def notify(title: str, message: str, on_click: Optional[Callable[[], None]] = No
             parent = wx.GetApp().GetTopWindow()
             # 親が無い場合は通知クリックを捕捉できないので on_click は実行しない
             msg = wx.adv.NotificationMessage(title, message, parent=parent)
-            if on_click and parent:
-                def handler(evt):
+            if on_click:
+                if parent:
+                    def handler(evt):
+                        try:
+                            on_click()
+                        except Exception:
+                            pass
+                        parent.Unbind(wx.adv.EVT_NOTIFICATION_MESSAGE_CLICKED, handler)
+                    parent.Bind(wx.adv.EVT_NOTIFICATION_MESSAGE_CLICKED, handler)
+                else:
+                    # 親が無い場合はクリックを拾えないので即実行
                     try:
                         on_click()
                     except Exception:
                         pass
-                    parent.Unbind(wx.adv.EVT_NOTIFICATION_MESSAGE_CLICKED, handler)
-                parent.Bind(wx.adv.EVT_NOTIFICATION_MESSAGE_CLICKED, handler)
             msg.Show()
         elif NOTIFY_AVAILABLE:
             n = Notify.Notification.new(title, message, None)

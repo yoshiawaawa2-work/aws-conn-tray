@@ -133,6 +133,8 @@ class WxTrayApp:
         self._app.SetExitOnFrameDelete(False)
         self._frame = wx.Frame(None)
         self._frame.Hide()
+        # 通知用にトップウィンドウを明示しておく
+        self._app.SetTopWindow(self._frame)
         self.tray_icon: Optional[WxTrayIcon] = None
         self.config: Optional[Config] = None
         self.ssm: Optional[SsmPortForward] = None
