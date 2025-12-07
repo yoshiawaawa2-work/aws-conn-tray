@@ -38,8 +38,18 @@ def notify(title: str, message: str, on_click: Optional[Callable[[], None]] = No
                 if "actions" in caps:
                     n.add_action("default", "open", lambda _n, _a: on_click())
                 else:
-                    # アクション非対応の場合は何もしない（自動実行もしない）
+                    # アクション非対応の場合は案内だけ出す
                     log_message("notify: actions not supported; on_clickは実行されませんでした")
+                    # フォローアップ通知でメニューからの操作を促す
+                    try:
+                        n2 = Notify.Notification.new(
+                            "通知アクションがサポートされていません",
+                            "メニューの「SSO ログイン」からログインしてください。",
+                            None,
+                        )
+                        n2.show()
+                    except Exception:
+                        pass
             n.show()
         else:
             raise RuntimeError("notify-unavailable")
