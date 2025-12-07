@@ -33,7 +33,16 @@ def notify(title: str, message: str, on_click: Optional[Callable[[], None]] = No
         if NOTIFY_AVAILABLE:
             n = Notify.Notification.new(title, message, None)
             if on_click:
-                n.add_action("default", "open", lambda _n, _a: on_click())
+                # 通知サーバがアクションをサポートするか確認（XFCE などは非対応の場合あり）
+                caps = set(Notify.get_server_caps() or [])
+                if "actions" in caps:
+                    n.add_action("default", "open", lambda _n, _a: on_click())
+                else:
+                    # アクション非対応ならすぐ実行しておく
+                    try:
+                        on_click()
+                    except Exception:
+                        pass
             n.show()
         else:
             raise RuntimeError("notify-unavailable")
@@ -44,6 +53,11 @@ def notify(title: str, message: str, on_click: Optional[Callable[[], None]] = No
                 ["notify-send", title, message, "--expire-time=8000"],
                 check=False,
             )
+            if on_click:
+                try:
+                    on_click()
+                except Exception:
+                    pass
         except FileNotFoundError:
             pass
     finally:
