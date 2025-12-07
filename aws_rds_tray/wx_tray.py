@@ -2,6 +2,9 @@ from typing import Callable, Optional, Dict, Any
 import os
 import threading
 import webbrowser
+import json
+import subprocess
+import sys
 
 try:
     import wx
@@ -10,7 +13,7 @@ try:
 except ImportError:
     wx = None
 
-from .paths import ICON_DIR
+from .paths import ICON_DIR, CONFIG_PATH, CONFIG_EXAMPLE_PATH, APP_ROOT
 from .logger import log_message, notify
 from .config_loader import Config, load_config
 from .sso import check_sso_token, is_sso_session_valid, start_sso_login_browser
@@ -46,6 +49,9 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
         self.cb_reconnect = on_reconnect
         self.cb_quit = on_quit
         self.set_icon_color("red")
+        # 左右クリックどちらでもメニューを開けるようにする
+        self.Bind(wx.adv.EVT_TASKBAR_LEFT_DOWN, self._on_taskbar_click)
+        self.Bind(wx.adv.EVT_TASKBAR_RIGHT_DOWN, self._on_taskbar_click)
 
     @staticmethod
     def menu_items():
@@ -69,9 +75,16 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
                 continue
             item = menu.Append(-1, label)
             handler = getattr(self, handler_name, None)
-        if handler:
-            self.Bind(wx.EVT_MENU, handler, item)
+            if handler:
+                self.Bind(wx.EVT_MENU, handler, item)
         return menu
+
+    def _on_taskbar_click(self, event):
+        menu = self.CreatePopupMenu()
+        if menu:
+            self.PopupMenu(menu)
+            menu.Destroy()
+        event.Skip()
 
     def set_icon_color(self, color: str):
         try:
@@ -120,17 +133,21 @@ class WxTrayApp:
         return True
 
     def init_tray(self, callbacks: dict, config: Optional[Config] = None):
-        self.config = config
-        if config:
-            self.ssm = SsmPortForward(
-                instance_id=config.instance_id,
-                profile=config.profile,
-                region=config.region,
-                local_port=config.local_port,
-                remote_host=config.remote_host,
-                remote_port=config.remote_port,
-            )
+        self.config = config or load_config()
+        self.ssm = SsmPortForward(
+            instance_id=self.config.instance_id,
+            profile=self.config.profile,
+            region=self.config.region,
+            local_port=self.config.local_port,
+            remote_host=self.config.remote_host,
+            remote_port=self.config.remote_port,
+        )
         # コールバックは dict で受け取る（未設定は None）
+        callbacks = callbacks or {}
+        callbacks.setdefault("settings", self.on_settings)
+        callbacks.setdefault("sso_login", self.on_sso_login)
+        callbacks.setdefault("reconnect", self.on_reconnect)
+        callbacks.setdefault("quit", self.on_quit)
         self.tray_icon = WxTrayIcon(
             parent=None,
             on_settings=callbacks.get("settings"),
@@ -139,8 +156,7 @@ class WxTrayApp:
             on_quit=callbacks.get("quit"),
         )
         # 監視タイマー
-        if config:
-            self._start_monitor()
+        self._start_monitor()
 
     def _start_monitor(self):
         if self.timer:
@@ -194,6 +210,89 @@ class WxTrayApp:
             # トークン無効時はブラウザログインを案内
             start_sso_login_browser(self.config.profile, self.config.region)
             self.tray_icon.set_icon_color("red")
+
+    # ===== メニュー操作ハンドラ =====
+    def on_settings(self):
+        defaults = _load_example_config()
+        current = _config_to_dict(self.config)
+        new_data = self._show_settings_dialog(current, defaults)
+        if not new_data:
+            return
+        ok, errors, parsed = validate_settings_input(new_data, defaults)
+        if not ok:
+            notify("入力エラー", "\n".join(errors))
+            return
+        if parsed != current:
+            _save_config(parsed)
+            notify("設定を保存しました", "アプリを再起動します。")
+            try:
+                subprocess.Popen([sys.executable, os.path.join(APP_ROOT, "tray_app.py")])
+            except Exception as e:
+                log_message(f"[wx-settings] restart failed: {e}")
+            self.shutdown()
+
+    def on_sso_login(self):
+        start_sso_login_browser(self.config.profile, self.config.region)
+
+    def on_reconnect(self):
+        if self.ssm and not self.ssm.is_alive():
+            self.tray_icon.set_icon_color("yellow")
+            self.ssm.start()
+        else:
+            notify("ポートフォワード", "すでにポートフォワードは有効です。")
+
+    def on_quit(self):
+        self.shutdown()
+
+    def _show_settings_dialog(self, current: Dict[str, Any], defaults: Dict[str, Any]):
+        """
+        設定ダイアログ。wx が無い場合や DISPLAY が無い場合は None を返す。
+        """
+        if wx is None or not _has_display():
+            return None
+        dlg = wx.Dialog(None, title="設定", size=(400, 400))
+        panel = wx.Panel(dlg)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        entries = {}
+
+        def add_text(label, key):
+            hs = wx.BoxSizer(wx.HORIZONTAL)
+            hs.Add(wx.StaticText(panel, label=label), 0, wx.ALL, 5)
+            txt = wx.TextCtrl(panel, value=str(current.get(key, "")))
+            entries[key] = txt
+            hs.Add(txt, 1, wx.ALL | wx.EXPAND, 5)
+            sizer.Add(hs, 0, wx.EXPAND)
+
+        def add_int(label, key):
+            hs = wx.BoxSizer(wx.HORIZONTAL)
+            hs.Add(wx.StaticText(panel, label=label), 0, wx.ALL, 5)
+            txt = wx.TextCtrl(panel, value=str(current.get(key, defaults.get(key, 0))))
+            entries[key] = txt
+            hs.Add(txt, 1, wx.ALL | wx.EXPAND, 5)
+            sizer.Add(hs, 0, wx.EXPAND)
+
+        for key in REQUIRED_KEYS:
+            add_text(key, key)
+        for key in INT_KEYS:
+            add_int(key, key)
+
+        btns = wx.StdDialogButtonSizer()
+        btn_ok = wx.Button(dlg, wx.ID_OK)
+        btn_cancel = wx.Button(dlg, wx.ID_CANCEL)
+        btns.AddButton(btn_ok)
+        btns.AddButton(btn_cancel)
+        btns.Realize()
+        sizer.Add(btns, 0, wx.ALIGN_CENTER | wx.ALL, 5)
+
+        panel.SetSizer(sizer)
+        dlg.Fit()
+        result = dlg.ShowModal()
+        if result != wx.ID_OK:
+            dlg.Destroy()
+            return None
+        data = {k: entries[k].GetValue() for k in entries}
+        dlg.Destroy()
+        return data
 
 
 # ===== WebView ヘルパー =====
@@ -278,6 +377,36 @@ def run_wx_app():
     """
     config = load_config()
     app = WxTrayApp()
-    # ここではコールバック未設定（後続で実装）
     app.init_tray(callbacks={}, config=config)
     app.MainLoop()
+
+
+# ===== 共通ヘルパー =====
+
+
+def _load_example_config() -> Dict[str, Any]:
+    with open(CONFIG_EXAMPLE_PATH, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _config_to_dict(cfg: Optional[Config]) -> Dict[str, Any]:
+    if cfg is None:
+        return {}
+    return {
+        "instance_id": cfg.instance_id,
+        "profile": cfg.profile,
+        "region": cfg.region,
+        "remote_host": cfg.remote_host,
+        "remote_port": cfg.remote_port,
+        "local_port": cfg.local_port,
+        "sso_start_url": cfg.sso_start_url,
+        "sso_login_timeout_seconds": cfg.sso_login_timeout_seconds,
+        "sso_auto_refresh_margin_seconds": cfg.sso_auto_refresh_margin_seconds,
+        "tunnel_check_interval_seconds": cfg.tunnel_check_interval_seconds,
+    }
+
+
+def _save_config(data: Dict[str, Any]):
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
