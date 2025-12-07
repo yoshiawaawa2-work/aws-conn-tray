@@ -203,7 +203,10 @@ class WxTrayApp:
                 self.timer.Stop()
             except Exception:
                 pass
-        self._app.Exit()
+        try:
+            self._app.ExitMainLoop()
+        except Exception:
+            pass
 
     # ===== 監視ロジック =====
     def monitor_once(self):
@@ -347,8 +350,8 @@ class WxTrayApp:
             add_int(key, key)
 
         btns = wx.StdDialogButtonSizer()
-        btn_ok = wx.Button(dlg, wx.ID_OK)
-        btn_cancel = wx.Button(dlg, wx.ID_CANCEL)
+        btn_ok = wx.Button(panel, wx.ID_OK)
+        btn_cancel = wx.Button(panel, wx.ID_CANCEL)
         btns.AddButton(btn_ok)
         btns.AddButton(btn_cancel)
         btns.Realize()
