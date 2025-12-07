@@ -25,6 +25,10 @@ def _has_display():
     if wx is None:
         return False
     try:
+        # wx.App.IsDisplayAvailable は App 未生成でも利用可能
+        if hasattr(wx.App, "IsDisplayAvailable"):
+            return bool(wx.App.IsDisplayAvailable())
+        # 古い環境向けフォールバック
         return wx.Display.GetCount() > 0
     except Exception:
         return False
