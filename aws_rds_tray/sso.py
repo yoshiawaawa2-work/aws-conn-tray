@@ -37,26 +37,57 @@ def token_cache_exists(cache_pattern: str = SSO_CACHE_PATTERN) -> bool:
     return bool(glob.glob(cache_pattern))
 
 
-def check_sso_token(cache_pattern: str = SSO_CACHE_PATTERN) -> Tuple[bool, Optional[float]]:
-    cache_files = glob.glob(cache_pattern)
-    if not cache_files:
-        return False, None
-    latest = max(cache_files, key=os.path.getmtime)
-    try:
-        import json
-        import datetime
+def _iter_sso_cache_entries(
+    cache_pattern: str, expected_start_url: Optional[str]
+) -> Tuple[str, float]:
+    """
+    Yield (path, remaining_seconds) for cache files that look like SSO access tokens.
+    Filters out client registration files (e.g., botocore-client-default) by requiring
+    accessToken/expiresAt and, if指定, startUrl が一致するものだけを返す。
+    """
+    import json
+    import datetime
 
-        with open(latest, "r", encoding="utf-8") as f:
-            data = json.load(f)
+    now = datetime.datetime.utcnow()
+    for path in glob.glob(cache_pattern):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+
+        # 必須フィールドが無いもの（登録情報など）は除外
+        access_token = data.get("accessToken")
         expires_at = data.get("expiresAt")
-        if not expires_at:
-            return False, None
-        expires_dt = datetime.datetime.strptime(expires_at, "%Y-%m-%dT%H:%M:%SZ")
-        now = datetime.datetime.utcnow()
+        start_url = data.get("startUrl")
+        if not access_token or not expires_at:
+            continue
+        if expected_start_url and start_url != expected_start_url:
+            continue
+
+        try:
+            expires_dt = datetime.datetime.strptime(expires_at, "%Y-%m-%dT%H:%M:%SZ")
+        except Exception:
+            continue
+
         remaining = (expires_dt - now).total_seconds()
-        return remaining > 0, remaining
-    except Exception:
+        yield path, remaining
+
+
+def check_sso_token(
+    cache_pattern: str = SSO_CACHE_PATTERN, expected_start_url: Optional[str] = None
+) -> Tuple[bool, Optional[float]]:
+    """
+    Returns (token_is_valid, remaining_seconds).
+    expected_start_url を渡すと、その startUrl を持つ accessToken/ expiresAt 付きファイルのみを採用する。
+    """
+    entries = list(_iter_sso_cache_entries(cache_pattern, expected_start_url))
+    if not entries:
         return False, None
+
+    # expiresAt が最新（remaining が最大）のものを採用
+    _, remaining = max(entries, key=lambda x: x[1])
+    return remaining > 0, remaining
 
 
 def is_sso_session_valid(profile: str, region: str) -> bool:
@@ -246,7 +277,7 @@ def run_sso_login(profile: str, region: str, sso_start_url: str, timeout: int) -
             _open_auth_ui(device_url or sso_start_url, code_hint)
             fallback_opened = True
 
-        token_ok, _ = check_sso_token()
+        token_ok, _ = check_sso_token(expected_start_url=sso_start_url)
         if token_ok and is_sso_session_valid(profile, region):
             log_message("SSO token detected during login; assuming success")
             if proc.poll() is None:

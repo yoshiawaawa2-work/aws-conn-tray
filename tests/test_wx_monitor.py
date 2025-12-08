@@ -59,7 +59,7 @@ def test_monitor_starts_ssm_when_token_ok(monkeypatch):
     app.ssm = DummySsm()
     app.config = type("C", (), {"profile": "p", "region": "r", "tunnel_check_interval_seconds": 1})()
 
-    def fake_check():
+    def fake_check(*args, **kwargs):
         return True, 100
     def fake_session(profile, region):
         return True
@@ -106,13 +106,23 @@ def test_notify_token_invalid_message(monkeypatch):
     monkeypatch.setattr(wx_tray, "notify", lambda t, m, on_click=None: called.update(title=t, message=m, on_click=on_click))
 
     app = wx_tray.WxTrayApp.__new__(wx_tray.WxTrayApp)  # App生成を避けるため __new__ で裸のインスタンス
-    app.config = type("C", (), {"profile": "p", "region": "r", "tunnel_check_interval_seconds": 1, "sso_auto_refresh_margin_seconds": 300})()
+    app.config = type(
+        "C",
+        (),
+        {
+            "profile": "p",
+            "region": "r",
+            "tunnel_check_interval_seconds": 1,
+            "sso_auto_refresh_margin_seconds": 300,
+            "sso_start_url": "https://example.com/start",
+        },
+    )()
     app.tray_icon = type("T", (), {"set_icon_color": lambda self, c: None})()
     app.ssm = None
     app._refreshing = False
     app._notified_invalid = False
 
-    monkeypatch.setattr(wx_tray, "check_sso_token", lambda: (False, -1))
+    monkeypatch.setattr(wx_tray, "check_sso_token", lambda *a, **k: (False, -1))
     monkeypatch.setattr(wx_tray, "is_sso_session_valid", lambda p, r: False)
 
     wx_tray.WxTrayApp.monitor_once(app)
@@ -146,10 +156,11 @@ def test_monitor_triggers_refresh_when_margin(monkeypatch):
             "region": "r",
             "tunnel_check_interval_seconds": 1,
             "sso_auto_refresh_margin_seconds": 300,
+            "sso_start_url": "https://example.com/start",
         },
     )()
     called = {}
-    monkeypatch.setattr(wx_tray, "check_sso_token", lambda: (True, 100))
+    monkeypatch.setattr(wx_tray, "check_sso_token", lambda *a, **k: (True, 100))
     monkeypatch.setattr(wx_tray, "is_sso_session_valid", lambda p, r: True)
     monkeypatch.setattr(wx_tray.WxTrayApp, "_start_sso_refresh", lambda self: called.setdefault("refresh", True))
     wx_tray.WxTrayApp.monitor_once(app)
@@ -208,9 +219,10 @@ def test_ssm_reconnect_and_icon(monkeypatch):
             "region": "r",
             "tunnel_check_interval_seconds": 1,
             "sso_auto_refresh_margin_seconds": 300,
+            "sso_start_url": "https://example.com/start",
         },
     )()
-    monkeypatch.setattr(wx_tray, "check_sso_token", lambda: (True, 1000))
+    monkeypatch.setattr(wx_tray, "check_sso_token", lambda *a, **k: (True, 1000))
     monkeypatch.setattr(wx_tray, "is_sso_session_valid", lambda p, r: True)
     wx_tray.WxTrayApp.monitor_once(app)
     assert app.ssm.starts == 1
