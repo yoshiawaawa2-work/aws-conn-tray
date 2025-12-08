@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import re
+import multiprocessing
 
 try:
     import wx
@@ -404,7 +405,8 @@ def open_pywebview_authorize(url: str, storage_dir: Optional[str] = None) -> boo
         def runner():
             webview.create_window("AWS SSO ログイン", url, width=800, height=600, **kw_storage)
             webview.start()
-        threading.Thread(target=runner, daemon=True).start()
+        proc = multiprocessing.Process(target=runner, daemon=True)
+        proc.start()
         return True
     except Exception as e:
         log_message(f"[pywebview] failed: {e}")
