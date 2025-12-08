@@ -383,11 +383,22 @@ def open_webview_authorize(url: str) -> bool:
         browser = wx.html2.WebView.New(frame)
         browser.LoadURL(url)
 
+        timer = wx.Timer(frame)
+
         def _maybe_close(*_args):
             try:
                 title = (browser.GetCurrentTitle() or "").lower()
                 cur_url = (browser.GetCurrentURL() or "").lower()
-                if "request approved" in title or "request%20approved" in cur_url or "request approved" in cur_url:
+                body = ""
+                try:
+                    body = (browser.GetPageText() or "").lower()
+                except Exception:
+                    pass
+                if "request approved" in title or "request approved" in cur_url or "request%20approved" in cur_url or "request approved" in body:
+                    try:
+                        timer.Stop()
+                    except Exception:
+                        pass
                     wx.CallAfter(frame.Destroy)
                     return True
             except Exception:
@@ -401,6 +412,11 @@ def open_webview_authorize(url: str) -> bool:
         browser.Bind(wx.html2.EVT_WEBVIEW_TITLE_CHANGED, _on_event)
         browser.Bind(wx.html2.EVT_WEBVIEW_NAVIGATED, _on_event)
         browser.Bind(wx.html2.EVT_WEBVIEW_LOADED, _on_event)
+        # 定期的にも確認（タイトル/URL が変わらないケースに備える）
+        def on_timer(evt):
+            _maybe_close()
+        frame.Bind(wx.EVT_TIMER, on_timer, timer)
+        timer.Start(1000)
         frame.Show()
         return True
     except Exception as e:
