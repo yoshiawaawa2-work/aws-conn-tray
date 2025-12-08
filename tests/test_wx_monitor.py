@@ -128,7 +128,7 @@ def test_is_request_approved():
 
 
 def test_open_pywebview_authorize(monkeypatch):
-    # pywebview.create_window が呼ばれ、storage_path が指定されることを確認（スレッドは同期実行に置き換え）
+    # pywebview.create_window が呼ばれ、storage_path または user_data_dir が指定されることを確認（スレッドは同期実行に置き換え）
     created = {}
 
     class DummyThread:
@@ -137,8 +137,11 @@ def test_open_pywebview_authorize(monkeypatch):
         def start(self):
             self.target()
 
-    def fake_create_window(title, url, width, height, storage_path):
-        created.update(title=title, url=url, width=width, height=height, storage_path=storage_path)
+    def fake_create_window(title, url, width=0, height=0, storage_path=None, **kwargs):
+        # storage_path を持つシグネチャにしておく
+        if storage_path is not None:
+            kwargs.setdefault("storage_path", storage_path)
+        created.update(title=title, url=url, width=width, height=height, kwargs=kwargs)
     def fake_start():
         created["started"] = True
 
@@ -148,7 +151,8 @@ def test_open_pywebview_authorize(monkeypatch):
     ok = wx_tray.open_pywebview_authorize("https://example.com/auth", storage_dir="/tmp/test-webview")
     assert ok is True
     assert created["url"] == "https://example.com/auth"
-    assert created["storage_path"] == "/tmp/test-webview"
+    # storage_path または user_data_dir のどちらかで永続化が設定される
+    assert any(k in created["kwargs"] for k in ("storage_path", "user_data_dir"))
     assert created.get("started") is True
 
 

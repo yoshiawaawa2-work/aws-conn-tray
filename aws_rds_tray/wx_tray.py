@@ -387,8 +387,22 @@ def open_pywebview_authorize(url: str, storage_dir: Optional[str] = None) -> boo
     storage_dir = storage_dir or WEBVIEW_STORAGE_DIR
     try:
         os.makedirs(storage_dir, exist_ok=True)
+
+        # create_window のシグネチャを調べて永続化オプションを選択
+        kw_storage: Dict[str, Any] = {}
+        try:
+            import inspect
+
+            sig = inspect.signature(webview.create_window)
+            if "storage_path" in sig.parameters:
+                kw_storage["storage_path"] = storage_dir
+            elif "user_data_dir" in sig.parameters:
+                kw_storage["user_data_dir"] = storage_dir
+        except Exception:
+            pass
+
         def runner():
-            webview.create_window("AWS SSO ログイン", url, width=800, height=600, storage_path=storage_dir)
+            webview.create_window("AWS SSO ログイン", url, width=800, height=600, **kw_storage)
             webview.start()
         threading.Thread(target=runner, daemon=True).start()
         return True
