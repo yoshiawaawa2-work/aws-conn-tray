@@ -21,7 +21,7 @@ from gi.repository import Gtk  # noqa: E402
 
 
 def ensure_initial_login(config) -> bool:
-    token_ok, remaining = check_sso_token()
+    token_ok, remaining = check_sso_token(expected_start_url=config.sso_start_url)
     session_ok = token_ok and is_sso_session_valid(config.profile, config.region)
     if token_ok and session_ok and remaining is not None and remaining > config.sso_auto_refresh_margin_seconds:
         log_message(f"Skip initial SSO login (remaining {remaining:.0f}s)")

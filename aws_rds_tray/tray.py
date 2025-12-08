@@ -259,7 +259,7 @@ class TrayApp:
 
     def monitor_loop(self):
         while not self._stop_event.is_set():
-            token_ok, remaining = check_sso_token()
+            token_ok, remaining = check_sso_token(expected_start_url=self.config.sso_start_url)
             if token_ok and not is_sso_session_valid(self.config.profile, self.config.region):
                 token_ok = False
             tunnel_ok = self.ssm.is_alive()
