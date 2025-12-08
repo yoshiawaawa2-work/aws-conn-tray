@@ -75,9 +75,9 @@ def test_monitor_starts_ssm_when_token_ok(monkeypatch):
 
 
 def test_start_sso_login_webview_fallback(monkeypatch):
-    # open_webview_authorize が False を返した場合にブラウザフォールバックと通知が呼ばれるか
+    # open_pywebview_authorize が False を返した場合にブラウザフォールバックと通知が呼ばれるか
     called = {}
-    monkeypatch.setattr(wx_tray, "open_webview_authorize", lambda url: False)
+    monkeypatch.setattr(wx_tray, "open_pywebview_authorize", lambda url: False)
     monkeypatch.setattr(wx_tray, "webbrowser", types.SimpleNamespace(open=lambda url: called.setdefault("opened", url)))
 
     def fake_notify(title, message, on_click=None):
@@ -125,6 +125,31 @@ def test_is_request_approved():
     assert wx_tray._is_request_approved("", "http://127.0.0.1:12345/oauth/callback?code=abc", "") is True
     assert wx_tray._is_request_approved("", "https://127.0.0.1/oauth/callback?code=xyz", "") is True
     assert wx_tray._is_request_approved("", "https://example.com/ok", "") is False
+
+
+def test_open_pywebview_authorize(monkeypatch):
+    # pywebview.create_window が呼ばれ、storage_path が指定されることを確認（スレッドは同期実行に置き換え）
+    created = {}
+
+    class DummyThread:
+        def __init__(self, target, daemon):
+            self.target = target
+        def start(self):
+            self.target()
+
+    def fake_create_window(title, url, width, height, storage_path):
+        created.update(title=title, url=url, width=width, height=height, storage_path=storage_path)
+    def fake_start():
+        created["started"] = True
+
+    monkeypatch.setattr(wx_tray, "webview", types.SimpleNamespace(create_window=fake_create_window, start=fake_start))
+    monkeypatch.setattr(wx_tray.threading, "Thread", DummyThread)
+
+    ok = wx_tray.open_pywebview_authorize("https://example.com/auth", storage_dir="/tmp/test-webview")
+    assert ok is True
+    assert created["url"] == "https://example.com/auth"
+    assert created["storage_path"] == "/tmp/test-webview"
+    assert created.get("started") is True
 
 
 def _bare_app():

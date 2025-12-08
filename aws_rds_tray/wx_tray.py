@@ -10,15 +10,21 @@ import re
 try:
     import wx
     import wx.adv
-    import wx.html2
 except ImportError:
     wx = None
+
+try:
+    import webview
+except Exception:
+    webview = None
 
 from .paths import ICON_DIR, CONFIG_PATH, CONFIG_EXAMPLE_PATH, APP_ROOT
 from .logger import log_message, notify
 from .config_loader import Config, load_config
 from .sso import check_sso_token, is_sso_session_valid, start_sso_login_browser
 from .ssm import SsmPortForward
+
+WEBVIEW_STORAGE_DIR = os.path.expanduser("~/.cache/aws-rds-tray/webview")
 
 
 def _has_display():
@@ -370,74 +376,32 @@ class WxTrayApp:
         return data
 
 
-# ===== WebView ヘルパー =====
+# ===== WebView ヘルパー (pywebview) =====
 
-def open_webview_authorize(url: str) -> bool:
+def open_pywebview_authorize(url: str, storage_dir: Optional[str] = None) -> bool:
     """
-    wx.html2.WebView を使って認可URLを開く。失敗したら False。
+    pywebview を使って認可URLを開く。storage_dir を指定してクッキー永続化。
     """
-    if wx is None:
+    if webview is None:
         return False
+    storage_dir = storage_dir or WEBVIEW_STORAGE_DIR
     try:
-        frame = wx.Frame(None, title="AWS SSO ログイン", size=(800, 600))
-        browser = wx.html2.WebView.New(frame)
-        browser.LoadURL(url)
-
-        timer = wx.Timer(frame)
-        debug_logged = {"once": False}
-
-        def _maybe_close(*_args):
-            try:
-                title = (browser.GetCurrentTitle() or "").lower()
-                cur_url = (browser.GetCurrentURL() or "").lower()
-                body = ""
-                try:
-                    body = (browser.GetPageText() or "").lower()
-                except Exception:
-                    pass
-                if not debug_logged["once"]:
-                    log_message(
-                        f"[wx-webview] debug title={title[:80]!r} url={cur_url[:200]!r} body_len={len(body)}"
-                    )
-                    debug_logged["once"] = True
-                if _is_request_approved(title, cur_url, body):
-                    log_message(
-                        f"[wx-webview] approved detected title={title} url={cur_url} body_snip={body[:200]!r}"
-                    )
-                    try:
-                        timer.Stop()
-                    except Exception:
-                        pass
-                    wx.CallAfter(frame.Destroy)
-                    return True
-            except Exception:
-                pass
-            return False
-
-        def _on_event(evt):
-            _maybe_close()
-            evt.Skip()
-
-        browser.Bind(wx.html2.EVT_WEBVIEW_TITLE_CHANGED, _on_event)
-        browser.Bind(wx.html2.EVT_WEBVIEW_NAVIGATED, _on_event)
-        browser.Bind(wx.html2.EVT_WEBVIEW_LOADED, _on_event)
-        # 定期的にも確認（タイトル/URL が変わらないケースに備える）
-        def on_timer(evt):
-            _maybe_close()
-        frame.Bind(wx.EVT_TIMER, on_timer, timer)
-        timer.Start(1000)
-        frame.Show()
+        os.makedirs(storage_dir, exist_ok=True)
+        def runner():
+            webview.create_window("AWS SSO ログイン", url, width=800, height=600, storage_path=storage_dir)
+            webview.start()
+        threading.Thread(target=runner, daemon=True).start()
         return True
     except Exception as e:
-        log_message(f"[wx-webview] failed: {e}")
+        log_message(f"[pywebview] failed: {e}")
         return False
 
 
 def start_sso_login_webview(url: str) -> bool:
     """
-    認可URLを WebView で開き、失敗時はデフォルトブラウザを開く。
+    認可URLを PyWebView で開き、失敗時はデフォルトブラウザを開く。
     """
-    if open_webview_authorize(url):
+    if open_pywebview_authorize(url):
         return True
     try:
         notify(

@@ -5,7 +5,7 @@
 - トレイメニュー: 「⚙️ 設定」「SSO ログイン」「ポートフォワード再接続」「終了」。
 - 通知方針: トークン無効時の通知は「メニューの『SSO ログイン』からログインしてください」と表示し、通知クリックでは何もしない（on_click=None）。
 - SSO 監視: `tunnel_check_interval_seconds` ごとに SSO トークン残時間を確認。margin 内なら `aws sso login --no-browser` で認可 URL を取得し、WebView で再認証を試行（失敗時はブラウザフォールバック）。
-- WebView: `wx.html2.WebView` で認可 URL を表示。タイトルに「Request approved」が含まれたら自動クローズ。
+- WebView: `pywebview` で認可 URL を表示（storage_path を指定してクッキー永続化）。ローカル callback（127.0.0.1/oauth/callback?code=…）で成功判定し自動クローズ。
 - トークン無効検知: 無効またはキャッシュなしの場合は赤アイコンにし、通知でメニュー操作を案内する。
 - ポートフォワード監視: SSM セッション状態を定期チェック。切断時は黄色→再接続、正常時は緑。
 - 設定ダイアログ: wx.Dialog で `config/config.json` を編集。必須項目/整数のバリデーションを行い、変更があれば保存して tray_app.py を再起動。
