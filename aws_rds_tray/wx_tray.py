@@ -394,15 +394,10 @@ def open_webview_authorize(url: str) -> bool:
                     body = (browser.GetPageText() or "").lower()
                 except Exception:
                     pass
-                if "request approved" in title or "request approved" in cur_url or "request%20approved" in cur_url or "request approved" in body:
-                    try:
-                        timer.Stop()
-                    except Exception:
-                        pass
-                    wx.CallAfter(frame.Destroy)
-                    return True
-                # 成功画面は title に「Request approved」ではなく body だけの場合もあるので、静的文字列でさらに確認
-                if "aws cli has been given requested permissions" in body:
+                if _is_request_approved(title, cur_url, body):
+                    log_message(
+                        f"[wx-webview] approved detected title={title} url={cur_url} body_snip={body[:200]!r}"
+                    )
                     try:
                         timer.Stop()
                     except Exception:
@@ -574,3 +569,15 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
     if not url:
         url = sso_start_url
     return url, code
+
+
+def _is_request_approved(title: str, url: str, body: str) -> bool:
+    title = (title or "").lower()
+    url = (url or "").lower()
+    body = (body or "").lower()
+    keys = [
+        "request approved",
+        "request%20approved",
+        "aws cli has been given requested permissions",
+    ]
+    return any(k in title or k in url or k in body for k in keys)

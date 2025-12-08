@@ -121,6 +121,15 @@ def test_notify_token_invalid_message(monkeypatch):
     assert called["on_click"] is None
 
 
+def test_is_request_approved():
+    title = "foo"
+    url = "https://example.com/success"
+    body = "Request approved\nAWS CLI has been given requested permissions"
+    assert wx_tray._is_request_approved(title, url, body) is True
+    assert wx_tray._is_request_approved("", "https://host/path?request%20approved", "") is True
+    assert wx_tray._is_request_approved("", "", "") is False
+
+
 def _bare_app():
     app = wx_tray.WxTrayApp.__new__(wx_tray.WxTrayApp)
     app.tray_icon = type("T", (), {"set_icon_color": lambda self, c: None})()
