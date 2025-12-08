@@ -578,12 +578,8 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
 
 
 def _is_request_approved(title: str, url: str, body: str) -> bool:
-    title = (title or "").lower()
     url = (url or "").lower()
-    body = (body or "").lower()
-    keys = [
-        "request approved",
-        "request%20approved",
-        "aws cli has been given requested permissions",
-    ]
-    return any(k in title or k in url or k in body for k in keys)
+    # デバイスフロー承認後のローカルコールバックを検出
+    if "127.0.0.1" in url and "oauth/callback" in url and "code=" in url:
+        return True
+    return False

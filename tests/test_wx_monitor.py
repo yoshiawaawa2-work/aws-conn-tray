@@ -122,12 +122,9 @@ def test_notify_token_invalid_message(monkeypatch):
 
 
 def test_is_request_approved():
-    title = "foo"
-    url = "https://example.com/success"
-    body = "Request approved\nAWS CLI has been given requested permissions"
-    assert wx_tray._is_request_approved(title, url, body) is True
-    assert wx_tray._is_request_approved("", "https://host/path?request%20approved", "") is True
-    assert wx_tray._is_request_approved("", "", "") is False
+    assert wx_tray._is_request_approved("", "http://127.0.0.1:12345/oauth/callback?code=abc", "") is True
+    assert wx_tray._is_request_approved("", "https://127.0.0.1/oauth/callback?code=xyz", "") is True
+    assert wx_tray._is_request_approved("", "https://example.com/ok", "") is False
 
 
 def _bare_app():
