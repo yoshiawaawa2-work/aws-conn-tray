@@ -7,6 +7,7 @@ import subprocess
 import sys
 import re
 import multiprocessing
+import contextlib
 
 try:
     import wx
@@ -403,8 +404,32 @@ def open_pywebview_authorize(url: str, storage_dir: Optional[str] = None) -> boo
             pass
 
         def runner():
-            webview.create_window("AWS SSO ログイン", url, width=800, height=600, **kw_storage)
-            webview.start()
+            # WebKitJavascriptError の標準エラー出力を抑制
+            with open(os.devnull, "w") as devnull, contextlib.redirect_stderr(devnull):
+                window = webview.create_window(
+                    "AWS SSO ログイン", url, width=800, height=600, **kw_storage
+                )
+
+                def check_and_close(_=None):
+                    try:
+                        cur = (window.get_current_url() or "").lower()
+                        if "127.0.0.1" in cur and "oauth/callback" in cur and "code=" in cur:
+                            window.destroy()
+                    except Exception:
+                        pass
+
+                # イベントハンドラを登録（利用可能なものだけ）
+                try:
+                    window.events.loaded += check_and_close
+                except Exception:
+                    pass
+                try:
+                    if hasattr(window.events, "navigation"):
+                        window.events.navigation += check_and_close
+                except Exception:
+                    pass
+
+                webview.start()
         proc = multiprocessing.Process(target=runner, daemon=True)
         proc.start()
         return True
