@@ -128,14 +128,37 @@ def test_is_request_approved():
 
 
 def test_open_pywebview_authorize(monkeypatch):
-    # pywebview.create_window が呼ばれ、storage_path または user_data_dir が指定されることを確認（スレッドは同期実行に置き換え）
+    # pywebview.create_window が呼ばれ、storage_path または user_data_dir が指定されることを確認
+    # navigation/loaded イベントで destroy が呼ばれることを確認（プロセスは同期実行に置き換え）
     created = {}
 
     def fake_create_window(title, url, width=0, height=0, storage_path=None, **kwargs):
         # storage_path を持つシグネチャにしておく
         if storage_path is not None:
             kwargs.setdefault("storage_path", storage_path)
-        created.update(title=title, url=url, width=width, height=height, kwargs=kwargs)
+        class EventList(list):
+            def __iadd__(self, other):
+                # pywebview はコールバックを追加する形。ここでは callable を単体で受け付ける
+                if callable(other):
+                    self.append(other)
+                    return self
+                return super().__iadd__(other)
+        class Events:
+            def __init__(self):
+                self.loaded = EventList()
+                self.navigation = EventList()
+        class Win:
+            def __init__(self):
+                self._destroyed = False
+                self.events = Events()
+                self._url = url
+            def get_current_url(self):
+                return self._url
+            def destroy(self):
+                self._destroyed = True
+        win = Win()
+        created.update(title=title, url=url, width=width, height=height, kwargs=kwargs, win=win)
+        return win
     def fake_start():
         created["started"] = True
 
@@ -154,6 +177,12 @@ def test_open_pywebview_authorize(monkeypatch):
     # storage_path または user_data_dir のどちらかで永続化が設定される
     assert any(k in created["kwargs"] for k in ("storage_path", "user_data_dir"))
     assert created.get("started") is True
+    # イベントが登録され、URL が callback を含むと destroy が呼ばれることを確認
+    for handler in created["win"].events.loaded + getattr(created["win"].events, "navigation", []):
+        # simulate navigation to callback URL
+        created["win"]._url = "http://127.0.0.1:1234/oauth/callback?code=abc"
+        handler(None)
+    assert created["win"]._destroyed is True
 
 
 def _bare_app():
