@@ -244,8 +244,8 @@ class WxTrayApp:
             if not self._notified_invalid:
                 notify(
                     "SSO トークンが無効です",
-                    "ここをクリックして SSO ログインしてください。",
-                    on_click=lambda: self.on_sso_login(),
+                    "メニューの「SSO ログイン」から SSO ログインしてください。",
+                    on_click=None,
                 )
                 log_message("[wx-monitor] token invalid, prompting login")
                 self._notified_invalid = True

@@ -98,3 +98,24 @@ def test_parse_authorize_url():
     url, code = wx_tray._parse_authorize_url(text)
     assert "authorize" in url
     assert code == "1A2B-3C4D"
+
+
+def test_notify_token_invalid_message(monkeypatch):
+    # トークン無効時のメッセージがメニュー誘導になっているか確認
+    called = {}
+    monkeypatch.setattr(wx_tray, "notify", lambda t, m, on_click=None: called.update(title=t, message=m, on_click=on_click))
+
+    app = wx_tray.WxTrayApp.__new__(wx_tray.WxTrayApp)  # App生成を避けるため __new__ で裸のインスタンス
+    app.config = type("C", (), {"profile": "p", "region": "r", "tunnel_check_interval_seconds": 1, "sso_auto_refresh_margin_seconds": 300})()
+    app.tray_icon = type("T", (), {"set_icon_color": lambda self, c: None})()
+    app.ssm = None
+    app._refreshing = False
+    app._notified_invalid = False
+
+    monkeypatch.setattr(wx_tray, "check_sso_token", lambda: (False, -1))
+    monkeypatch.setattr(wx_tray, "is_sso_session_valid", lambda p, r: False)
+
+    wx_tray.WxTrayApp.monitor_once(app)
+    assert called["title"] == "SSO トークンが無効です"
+    assert "メニューの「SSO ログイン」" in called["message"]
+    assert called["on_click"] is None
