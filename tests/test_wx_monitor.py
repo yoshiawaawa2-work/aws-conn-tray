@@ -119,3 +119,99 @@ def test_notify_token_invalid_message(monkeypatch):
     assert called["title"] == "SSO トークンが無効です"
     assert "メニューの「SSO ログイン」" in called["message"]
     assert called["on_click"] is None
+
+
+def _bare_app():
+    app = wx_tray.WxTrayApp.__new__(wx_tray.WxTrayApp)
+    app.tray_icon = type("T", (), {"set_icon_color": lambda self, c: None})()
+    app.ssm = None
+    app._refreshing = False
+    app._notified_invalid = False
+    return app
+
+
+def test_monitor_triggers_refresh_when_margin(monkeypatch):
+    app = _bare_app()
+    app.config = type(
+        "C",
+        (),
+        {
+            "profile": "p",
+            "region": "r",
+            "tunnel_check_interval_seconds": 1,
+            "sso_auto_refresh_margin_seconds": 300,
+        },
+    )()
+    called = {}
+    monkeypatch.setattr(wx_tray, "check_sso_token", lambda: (True, 100))
+    monkeypatch.setattr(wx_tray, "is_sso_session_valid", lambda p, r: True)
+    monkeypatch.setattr(wx_tray.WxTrayApp, "_start_sso_refresh", lambda self: called.setdefault("refresh", True))
+    wx_tray.WxTrayApp.monitor_once(app)
+    assert called.get("refresh") is True
+
+
+def test_refresh_webview_fallback(monkeypatch):
+    app = _bare_app()
+    app.config = type(
+        "C",
+        (),
+        {
+            "profile": "p",
+            "region": "r",
+            "sso_start_url": "https://start.example.com",
+            "sso_login_timeout_seconds": 10,
+        },
+    )()
+    called = {}
+
+    def fake_thread(target, daemon):
+        class Dummy:
+            def start(self_inner):
+                target()
+        return Dummy()
+
+    monkeypatch.setattr(wx_tray.threading, "Thread", fake_thread)
+    monkeypatch.setattr(wx_tray, "_fetch_authorize_url", lambda *a, **k: (None, None))
+    monkeypatch.setattr(wx_tray, "start_sso_login_webview", lambda url: False)
+    monkeypatch.setattr(wx_tray, "notify", lambda t, m, on_click=None: called.setdefault("notify", (t, m)))
+    wx_tray.WxTrayApp._start_sso_refresh(app)
+    assert called["notify"][0].startswith("SSO トークン更新")
+
+
+def test_ssm_reconnect_and_icon(monkeypatch):
+    app = _bare_app()
+    calls = {"icon": []}
+
+    class DummySsm:
+        def __init__(self, alive):
+            self._alive = alive
+            self.starts = 0
+        def is_alive(self):
+            return self._alive
+        def start(self):
+            self.starts += 1
+            self._alive = True
+
+    app.ssm = DummySsm(alive=False)
+    app.tray_icon = type("T", (), {"set_icon_color": lambda self, c: calls["icon"].append(c)})()
+    app.config = type(
+        "C",
+        (),
+        {
+            "profile": "p",
+            "region": "r",
+            "tunnel_check_interval_seconds": 1,
+            "sso_auto_refresh_margin_seconds": 300,
+        },
+    )()
+    monkeypatch.setattr(wx_tray, "check_sso_token", lambda: (True, 1000))
+    monkeypatch.setattr(wx_tray, "is_sso_session_valid", lambda p, r: True)
+    wx_tray.WxTrayApp.monitor_once(app)
+    assert app.ssm.starts == 1
+    assert "yellow" in calls["icon"] or "green" in calls["icon"]
+
+    # トンネルが生きている場合は緑
+    app.ssm._alive = True
+    calls["icon"].clear()
+    wx_tray.WxTrayApp.monitor_once(app)
+    assert "green" in calls["icon"]
