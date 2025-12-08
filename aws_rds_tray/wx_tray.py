@@ -1,7 +1,6 @@
 from typing import Callable, Optional, Dict, Any, Tuple
 import os
 import threading
-import webbrowser
 import json
 import subprocess
 import sys
@@ -27,6 +26,7 @@ from .sso import check_sso_token, is_sso_session_valid, start_sso_login_browser
 from .ssm import SsmPortForward
 
 WEBVIEW_STORAGE_DIR = os.path.expanduser("~/.cache/aws-rds-tray/webview")
+MINI_PROMPT_SIZE = (260, 90)
 
 
 def _has_display():
@@ -150,6 +150,7 @@ class WxTrayApp:
         self._refreshing = False
         self._notified_invalid = False
         self._last_webview_frame: Optional[wx.Frame] = None
+        self._mini_prompt: Optional["MiniPrompt"] = None
 
     def OnInit(self):
         return True
@@ -242,19 +243,16 @@ class WxTrayApp:
 
         if token_ok:
             self._notified_invalid = False
+            self._close_mini_prompt()
             if not tunnel_ok and self.ssm:
                 self.tray_icon.set_icon_color("yellow")
                 self.ssm.start()
             elif tunnel_ok:
                 self.tray_icon.set_icon_color("green")
         else:
-            # トークン無効時は通知＋ブラウザログイン導線
+            # トークン無効時はミニダイアログで WebView 誘導
             if not self._notified_invalid:
-                notify(
-                    "SSO トークンが無効です",
-                    "メニューの「SSO ログイン」から SSO ログインしてください。",
-                    on_click=None,
-                )
+                self._show_sso_prompt(self.config.sso_start_url, "SSO トークンが無効です")
                 log_message("[wx-monitor] token invalid, prompting login")
                 self._notified_invalid = True
             self.tray_icon.set_icon_color("red")
@@ -273,19 +271,9 @@ class WxTrayApp:
                     timeout=self.config.sso_login_timeout_seconds,
                 )
                 if url:
-                    ok = start_sso_login_webview(url)
-                    if not ok:
-                        notify(
-                            "SSO トークン更新",
-                            "認可画面を開けませんでした。ここをクリックしてブラウザでログインしてください。",
-                            on_click=lambda: self.on_sso_login(),
-                        )
+                    self._show_sso_prompt(url, "SSO トークンを更新するためログイン画面を開きます。")
                 else:
-                    notify(
-                        "SSO トークン更新",
-                        "認可URLを取得できませんでした。ここをクリックしてブラウザでログインしてください。",
-                        on_click=lambda: self.on_sso_login(),
-                    )
+                    notify("SSO トークン更新", "認可URLを取得できませんでした。メニューの「SSO ログイン」から再試行してください。")
             finally:
                 self._refreshing = False
 
@@ -313,7 +301,7 @@ class WxTrayApp:
             self.shutdown()
 
     def on_sso_login(self):
-        start_sso_login_browser(self.config.profile, self.config.region)
+        start_sso_login_webview(self.config.sso_start_url)
         self._refreshing = False
         self._notified_invalid = False
 
@@ -376,6 +364,29 @@ class WxTrayApp:
         data = {k: entries[k].GetValue() for k in entries}
         dlg.Destroy()
         return data
+
+    def _show_sso_prompt(self, auth_url: str, message: str):
+        if self._mini_prompt:
+            try:
+                self._mini_prompt.Raise()
+                return
+            except Exception:
+                self._mini_prompt = None
+
+        def on_click():
+            start_sso_login_webview(auth_url)
+            self._close_mini_prompt()
+
+        self._mini_prompt = MiniPrompt(message=message, on_click=on_click)
+        self._mini_prompt.show_bottom_right()
+
+    def _close_mini_prompt(self):
+        if self._mini_prompt:
+            try:
+                self._mini_prompt.Destroy()
+            except Exception:
+                pass
+            self._mini_prompt = None
 
 
 # ===== WebView ヘルパー (pywebview) =====
@@ -440,21 +451,12 @@ def open_pywebview_authorize(url: str, storage_dir: Optional[str] = None) -> boo
 
 def start_sso_login_webview(url: str) -> bool:
     """
-    認可URLを PyWebView で開き、失敗時はデフォルトブラウザを開く。
+    認可URLを PyWebView で開く（ブラウザフォールバックなし）。
     """
     if open_pywebview_authorize(url):
         return True
-    try:
-        notify(
-            "SSO ログイン",
-            "ブラウザで SSO ログインを開始します。",
-            on_click=lambda: webbrowser.open(url),
-        )
-        webbrowser.open(url)
-        return True
-    except Exception as e:
-        log_message(f"[wx-webview] fallback browser failed: {e}")
-        return False
+    notify("SSO ログイン", "WebView を開けませんでした。後で再試行してください。", on_click=None)
+    return False
 
 
 # ===== 設定バリデーション =====
@@ -534,6 +536,66 @@ def _save_config(data: Dict[str, Any]):
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# ===== ミニダイアログ =====
+
+
+class MiniPrompt(wx.Frame):
+    """
+    右下に出す小さな半透明ダイアログ。
+    クリックでコールバックを呼ぶだけでフォーカス奪取を最小化。
+    """
+
+    def __init__(self, message: str, on_click: Callable[[], None]):
+        style = wx.STAY_ON_TOP | wx.FRAME_NO_TASKBAR | wx.BORDER_SIMPLE
+        super().__init__(None, title="", size=MINI_PROMPT_SIZE, style=style)
+        self.on_click = on_click
+        panel = wx.Panel(self)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        label = wx.StaticText(panel, label=message, style=wx.ALIGN_LEFT)
+        btn = wx.Button(panel, label="開く")
+        sizer.Add(label, 1, wx.ALL | wx.EXPAND, 8)
+        sizer.Add(btn, 0, wx.ALL | wx.ALIGN_RIGHT, 8)
+        panel.SetSizer(sizer)
+
+        # 半透明（可能な環境のみ）
+        try:
+            self.SetTransparent(220)
+        except Exception:
+            pass
+
+        # クリックでコールバック
+        btn.Bind(wx.EVT_BUTTON, self._on_click)
+        self.Bind(wx.EVT_LEFT_DOWN, self._on_click)
+        panel.Bind(wx.EVT_LEFT_DOWN, self._on_click)
+        label.Bind(wx.EVT_LEFT_DOWN, self._on_click)
+
+    def show_bottom_right(self):
+        try:
+            scr_w, scr_h = wx.GetDisplaySize()
+            w, h = self.GetSize()
+            x = max(0, scr_w - w - 20)
+            y = max(0, scr_h - h - 40)
+            self.SetPosition((x, y))
+            # フォーカスを奪わずに表示
+            if hasattr(self, "ShowWithoutActivating"):
+                self.ShowWithoutActivating()
+            else:
+                self.Show()
+            self.Raise()
+        except Exception:
+            self.Show()
+
+    def _on_click(self, _evt=None):
+        try:
+            if self.on_click:
+                self.on_click()
+        finally:
+            try:
+                self.Destroy()
+            except Exception:
+                pass
 
 
 # ===== SSO 認可URL取得（ブラウザ開き専用の軽量版） =====

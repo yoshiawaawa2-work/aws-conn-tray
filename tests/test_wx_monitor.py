@@ -88,9 +88,9 @@ def test_start_sso_login_webview_fallback(monkeypatch):
     monkeypatch.setattr(wx_tray, "notify", fake_notify)
 
     ok = wx_tray.start_sso_login_webview("https://example.com/auth")
-    assert ok is True
-    assert called.get("opened") == "https://example.com/auth"
-    assert called.get("notify")[0] == "SSO ログイン"
+    assert ok is False
+    assert "notify" in called
+    assert "WebView" in called["notify"][1]
 
 
 def test_parse_authorize_url():
@@ -121,14 +121,15 @@ def test_notify_token_invalid_message(monkeypatch):
     app.ssm = None
     app._refreshing = False
     app._notified_invalid = False
+    called_prompt = {}
+    monkeypatch.setattr(wx_tray.WxTrayApp, "_show_sso_prompt", lambda self, url, msg: called_prompt.setdefault("msg", msg))
 
     monkeypatch.setattr(wx_tray, "check_sso_token", lambda *a, **k: (False, -1))
     monkeypatch.setattr(wx_tray, "is_sso_session_valid", lambda p, r: False)
 
     wx_tray.WxTrayApp.monitor_once(app)
-    assert called["title"] == "SSO トークンが無効です"
-    assert "メニューの「SSO ログイン」" in called["message"]
-    assert called["on_click"] is None
+    # ミニダイアログ誘導が呼ばれていること
+    assert called_prompt["msg"].startswith("SSO トークンが無効です")
 
 
 def test_is_request_approved():
@@ -201,6 +202,7 @@ def _bare_app():
     app.ssm = None
     app._refreshing = False
     app._notified_invalid = False
+    app._mini_prompt = None
     return app
 
 
