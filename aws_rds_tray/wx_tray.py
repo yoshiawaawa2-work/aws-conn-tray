@@ -384,6 +384,7 @@ def open_webview_authorize(url: str) -> bool:
         browser.LoadURL(url)
 
         timer = wx.Timer(frame)
+        debug_logged = {"once": False}
 
         def _maybe_close(*_args):
             try:
@@ -394,6 +395,11 @@ def open_webview_authorize(url: str) -> bool:
                     body = (browser.GetPageText() or "").lower()
                 except Exception:
                     pass
+                if not debug_logged["once"]:
+                    log_message(
+                        f"[wx-webview] debug title={title[:80]!r} url={cur_url[:200]!r} body_len={len(body)}"
+                    )
+                    debug_logged["once"] = True
                 if _is_request_approved(title, cur_url, body):
                     log_message(
                         f"[wx-webview] approved detected title={title} url={cur_url} body_snip={body[:200]!r}"
