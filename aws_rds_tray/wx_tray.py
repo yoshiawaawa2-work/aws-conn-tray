@@ -401,6 +401,14 @@ def open_webview_authorize(url: str) -> bool:
                         pass
                     wx.CallAfter(frame.Destroy)
                     return True
+                # 成功画面は title に「Request approved」ではなく body だけの場合もあるので、静的文字列でさらに確認
+                if "aws cli has been given requested permissions" in body:
+                    try:
+                        timer.Stop()
+                    except Exception:
+                        pass
+                    wx.CallAfter(frame.Destroy)
+                    return True
             except Exception:
                 pass
             return False
