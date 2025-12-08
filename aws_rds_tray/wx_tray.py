@@ -223,7 +223,7 @@ class WxTrayApp:
         if not self.config:
             return
 
-        token_ok, remaining = check_sso_token()
+        token_ok, remaining = check_sso_token(expected_start_url=self.config.sso_start_url)
         if token_ok and not is_sso_session_valid(self.config.profile, self.config.region):
             token_ok = False
 

@@ -1,4 +1,6 @@
 import os
+import datetime
+import json
 
 from aws_rds_tray import sso
 
@@ -19,6 +21,43 @@ def test_token_cache_exists(tmp_path):
     assert not sso.token_cache_exists(pattern)
     (tmp_path / "token.json").write_text("{}", encoding="utf-8")
     assert sso.token_cache_exists(pattern)
+
+
+def test_check_sso_token_filters_access_token_and_start_url(tmp_path):
+    # registration (clientIdのみ) は無視される
+    (tmp_path / "reg.json").write_text('{"clientId": "abc", "expiresAt": "2099-01-01T00:00:00Z"}', encoding="utf-8")
+
+    now = datetime.datetime.utcnow()
+    future = (now + datetime.timedelta(seconds=500)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    other = (now + datetime.timedelta(seconds=100)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    good = {
+        "startUrl": "https://good.example.com/start",
+        "accessToken": "token-good",
+        "expiresAt": future,
+    }
+    bad = {
+        "startUrl": "https://other.example.com/start",
+        "accessToken": "token-other",
+        "expiresAt": other,
+    }
+    (tmp_path / "good.json").write_text(json.dumps(good), encoding="utf-8")
+    (tmp_path / "bad.json").write_text(json.dumps(bad), encoding="utf-8")
+
+    ok, remaining = sso.check_sso_token(
+        cache_pattern=os.path.join(tmp_path, "*.json"),
+        expected_start_url="https://good.example.com/start",
+    )
+    assert ok is True
+    assert remaining is not None and remaining > 450  # future の方が採用される
+
+    # startUrl が一致しない場合は無効扱い
+    ok2, rem2 = sso.check_sso_token(
+        cache_pattern=os.path.join(tmp_path, "*.json"),
+        expected_start_url="https://not-found.example.com/start",
+    )
+    assert ok2 is False
+    assert rem2 is None
 
 
 def test_is_sso_session_valid(monkeypatch):
