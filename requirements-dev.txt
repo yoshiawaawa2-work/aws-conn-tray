@@ -7,6 +7,10 @@ flake8
 mypy
 pytest
 pytest-mock
+pytest-xvfb
 
 # ビルドツール
 pyinstaller
+
+# wxPython (トレイ/メニュー/GUI 用)
+wxPython==4.2.1

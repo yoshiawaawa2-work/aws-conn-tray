@@ -1,2 +1,3 @@
 # ランタイムで必要な Python パッケージ
 PySimpleGUI
+wxPython==4.2.1
