@@ -131,12 +131,6 @@ def test_open_pywebview_authorize(monkeypatch):
     # pywebview.create_window が呼ばれ、storage_path または user_data_dir が指定されることを確認（スレッドは同期実行に置き換え）
     created = {}
 
-    class DummyThread:
-        def __init__(self, target, daemon):
-            self.target = target
-        def start(self):
-            self.target()
-
     def fake_create_window(title, url, width=0, height=0, storage_path=None, **kwargs):
         # storage_path を持つシグネチャにしておく
         if storage_path is not None:
@@ -145,8 +139,14 @@ def test_open_pywebview_authorize(monkeypatch):
     def fake_start():
         created["started"] = True
 
+    class DummyProc:
+        def __init__(self, target, daemon):
+            self.target = target
+        def start(self):
+            self.target()
+
     monkeypatch.setattr(wx_tray, "webview", types.SimpleNamespace(create_window=fake_create_window, start=fake_start))
-    monkeypatch.setattr(wx_tray.threading, "Thread", DummyThread)
+    monkeypatch.setattr(wx_tray.multiprocessing, "Process", DummyProc)
 
     ok = wx_tray.open_pywebview_authorize("https://example.com/auth", storage_dir="/tmp/test-webview")
     assert ok is True
