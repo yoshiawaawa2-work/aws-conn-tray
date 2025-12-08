@@ -383,15 +383,24 @@ def open_webview_authorize(url: str) -> bool:
         browser = wx.html2.WebView.New(frame)
         browser.LoadURL(url)
 
-        def on_title(evt):
-            title = evt.GetString()
-            if "Request approved" in title:
-                try:
-                    frame.Destroy()
-                except Exception:
-                    pass
+        def _maybe_close(*_args):
+            try:
+                title = (browser.GetCurrentTitle() or "").lower()
+                cur_url = (browser.GetCurrentURL() or "").lower()
+                if "request approved" in title or "request%20approved" in cur_url or "request approved" in cur_url:
+                    wx.CallAfter(frame.Destroy)
+                    return True
+            except Exception:
+                pass
+            return False
 
-        browser.Bind(wx.html2.EVT_WEBVIEW_TITLE_CHANGED, on_title)
+        def _on_event(evt):
+            _maybe_close()
+            evt.Skip()
+
+        browser.Bind(wx.html2.EVT_WEBVIEW_TITLE_CHANGED, _on_event)
+        browser.Bind(wx.html2.EVT_WEBVIEW_NAVIGATED, _on_event)
+        browser.Bind(wx.html2.EVT_WEBVIEW_LOADED, _on_event)
         frame.Show()
         return True
     except Exception as e:
