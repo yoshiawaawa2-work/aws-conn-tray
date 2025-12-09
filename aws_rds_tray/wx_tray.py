@@ -720,8 +720,8 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
     stdout_acc = ""
     stderr_acc = ""
 
-    # PTY経由で擬似TTYを見せると URL が出やすい
-    use_pty = PTY_AVAILABLE
+    # PTY経由で擬似TTYを見せると URL が出やすい (posix 限定)
+    use_pty = PTY_AVAILABLE and os.name == "posix"
     master_fd = None
     slave_fd = None
     try:
@@ -731,7 +731,7 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
             read_fds = [master_fd]
         else:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            read_fds = [proc.stdout, proc.stderr]
+            read_fds = []
     except Exception as e:
         log_message(f"[wx-auth-url] failed to start aws sso login: {e}")
         if master_fd:
@@ -741,47 +741,39 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
         return None, None
 
     try:
-        while time.time() < deadline:
-            if proc.poll() is not None:
-                break
-            ready, _, _ = select.select(read_fds, [], [], 1)
-            for stream in ready:
-                if use_pty:
+        if use_pty:
+            while time.time() < deadline:
+                if proc.poll() is not None:
+                    break
+                ready, _, _ = select.select(read_fds, [], [], 1)
+                for stream in ready:
                     line_bytes = os.read(stream, 4096)
                     if not line_bytes:
                         continue
                     line = line_bytes.decode(errors="ignore")
                     stdout_acc += line
-                else:
-                    line = stream.readline()
-                    if not line:
-                        continue
-                    if stream is proc.stdout:
-                        stdout_acc += line
-                    else:
-                        stderr_acc += line
-                u, c = _parse_authorize_url(line)
-                if u and "authorize" in u.lower():
-                    url, code = u, c
-                    log_message(f"[wx-auth-url] authorize url fetched (stream): {u}")
-                    # URLが取れたらそのまま戻る（プロセスはバックグラウンドで継続させる）
-                    return url, code
-            if url:
-                break
-        # URLが取れなかった場合のみ、残り出力を取得して判定
-        if not use_pty:
+                    u, c = _parse_authorize_url(line)
+                    if u and "authorize" in u.lower():
+                        url, code = u, c
+                        log_message(f"[wx-auth-url] authorize url fetched (stream): {u}")
+                        return url, code
+        else:
+            # Windows など select/pty が使えない環境ではまとめて読み取る
             try:
-                out, err = proc.communicate(timeout=max(1, deadline - time.time()))
-                stdout_acc += out or ""
-                stderr_acc += err or ""
+                out, err = proc.communicate(timeout=max_wait)
             except subprocess.TimeoutExpired:
                 try:
                     proc.kill()
                 except Exception:
                     pass
-        else:
-            # PTYの場合は read_fds から既に読み込んでいるので communicate は不要
-            pass
+                out, err = proc.communicate()
+            stdout_acc += out or ""
+            stderr_acc += err or ""
+            u, c = _parse_authorize_url(stdout_acc)
+            if u and "authorize" in (u or "").lower():
+                url, code = u, c
+                log_message(f"[wx-auth-url] authorize url fetched (pipe): {u}")
+                return url, code
     except Exception as e:
         log_message(f"[wx-auth-url] error while reading: {e}")
         try:
