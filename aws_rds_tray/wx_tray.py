@@ -9,6 +9,7 @@ import multiprocessing
 import contextlib
 import select
 import time
+import webbrowser
 
 try:
     import wx
@@ -28,6 +29,7 @@ from .sso import check_sso_token, is_sso_session_valid, start_sso_login_browser
 from .ssm import SsmPortForward
 
 WEBVIEW_STORAGE_DIR = os.path.expanduser("~/.cache/aws-rds-tray/webview")
+QT_WEBVIEW_STORAGE_DIR = os.path.expanduser("~/.cache/aws-rds-tray/qt-webview")
 MINI_PROMPT_SIZE = (260, 90)
 
 try:
@@ -535,13 +537,49 @@ webview.start()
         return False
 
 
+def open_qt_webview_authorize(url: str, storage_dir: Optional[str] = None) -> bool:
+    """
+    PySide6 + QtWebEngine をサブプロセスで起動して認可URLを開く。
+    """
+    storage_dir = storage_dir or QT_WEBVIEW_STORAGE_DIR
+    try:
+        os.makedirs(storage_dir, exist_ok=True)
+    except Exception:
+        pass
+    cmd = [
+        sys.executable,
+        "-m",
+        "aws_rds_tray.qwebview_runner",
+        url,
+        "--storage-path",
+        storage_dir,
+    ]
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        log_message(f"[qt-webview] subprocess start url={url} storage={storage_dir}")
+        return True
+    except Exception as e:
+        log_message(f"[qt-webview] failed to start: {e}")
+        return False
+
+
 def start_sso_login_webview(url: str) -> bool:
     """
-    認可URLを PyWebView で開く（ブラウザフォールバックなし）。
+    認可URLを Qt WebEngine (PySide6) で開く。失敗時はブラウザフォールバック。
     """
-    if open_pywebview_authorize(url):
+    if not url:
+        return False
+    if open_qt_webview_authorize(url, storage_dir=QT_WEBVIEW_STORAGE_DIR):
         return True
-    notify("SSO ログイン", "WebView を開けませんでした。後で再試行してください。", on_click=None)
+    notify(
+        "SSO ログイン",
+        "WebView を開けませんでした。デフォルトブラウザで開きます。",
+        on_click=lambda: webbrowser.open(url),
+    )
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
     return False
 
 
