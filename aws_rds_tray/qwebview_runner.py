@@ -13,7 +13,8 @@ from typing import Optional
 try:
     from PySide6.QtCore import QUrl
     from PySide6.QtWidgets import QApplication
-    from PySide6.QtWebEngineWidgets import QWebEngineView, QWebEngineProfile, QWebEnginePage
+    from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
+    from PySide6.QtWebEngineWidgets import QWebEngineView
 
     QT_AVAILABLE = True
     QT_IMPORT_ERROR = ""
@@ -51,7 +52,6 @@ def run_webview(authorize_url: str, storage_path: Optional[str] = None) -> int:
     page = QWebEnginePage(profile)
     view = QWebEngineView()
     view.setPage(page)
-    view.setAttribute(view.WA_DeleteOnClose, True)
     view.resize(900, 700)
     view.load(QUrl(authorize_url))
 
