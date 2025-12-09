@@ -164,6 +164,9 @@ def test_open_pywebview_authorize(monkeypatch):
     class DummyPopen:
         def __init__(self, args, stdout=None, stderr=None):
             created["args"] = args
+            self._rc = None
+        def poll(self):
+            return self._rc
         def __enter__(self):  # not used
             return self
 

@@ -555,8 +555,14 @@ def open_qt_webview_authorize(url: str, storage_dir: Optional[str] = None) -> bo
         storage_dir,
     ]
     try:
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         log_message(f"[qt-webview] subprocess start url={url} storage={storage_dir}")
+        # すぐに落ちていないか簡易チェック（依存不足など）
+        time.sleep(0.5)
+        rc = proc.poll()
+        if rc not in (None, 0):
+            log_message(f"[qt-webview] exited early rc={rc}")
+            return False
         return True
     except Exception as e:
         log_message(f"[qt-webview] failed to start: {e}")
