@@ -555,13 +555,17 @@ def open_qt_webview_authorize(url: str, storage_dir: Optional[str] = None) -> bo
         storage_dir,
     ]
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         log_message(f"[qt-webview] subprocess start url={url} storage={storage_dir}")
         # すぐに落ちていないか簡易チェック（依存不足など）
         time.sleep(0.5)
         rc = proc.poll()
         if rc not in (None, 0):
-            log_message(f"[qt-webview] exited early rc={rc}")
+            try:
+                out, err = proc.communicate(timeout=1)
+            except Exception:
+                out, err = "", ""
+            log_message(f"[qt-webview] exited early rc={rc} stdout={out!r} stderr={err!r}")
             return False
         return True
     except Exception as e:
@@ -684,6 +688,8 @@ class MiniPrompt(wx.Frame):
         panel = wx.Panel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
         label = wx.StaticText(panel, label=message, style=wx.ALIGN_LEFT)
+        # 長い文言でも折り返す
+        label.Wrap(self.GetSize().width - 20)
         btn = wx.Button(panel, label=button_label)
         sizer.Add(label, 1, wx.ALL | wx.EXPAND, 8)
         sizer.Add(btn, 0, wx.ALL | wx.ALIGN_RIGHT, 8)
