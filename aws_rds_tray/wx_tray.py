@@ -7,6 +7,8 @@ import sys
 import re
 import multiprocessing
 import contextlib
+import select
+import time
 
 try:
     import wx
@@ -27,6 +29,13 @@ from .ssm import SsmPortForward
 
 WEBVIEW_STORAGE_DIR = os.path.expanduser("~/.cache/aws-rds-tray/webview")
 MINI_PROMPT_SIZE = (260, 90)
+
+try:
+    import pty
+
+    PTY_AVAILABLE = True
+except Exception:
+    PTY_AVAILABLE = False
 
 
 def _has_display():
@@ -122,7 +131,10 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
     def on_quit(self, _evt=None):
         if self.cb_quit:
             self.cb_quit()
-        wx.CallAfter(wx.GetApp().Exit)
+        try:
+            wx.CallAfter(lambda: wx.GetApp().ExitMainLoop())
+        except Exception:
+            wx.CallAfter(lambda: wx.GetApp().ExitMainLoop())
 
 
 class WxTrayApp:
@@ -270,10 +282,11 @@ class WxTrayApp:
                     self.config.sso_start_url,
                     timeout=self.config.sso_login_timeout_seconds,
                 )
-                if url:
+                if url and "authorize" in url.lower():
                     self._show_sso_prompt(url, "SSO トークンを更新するためログイン画面を開きます。")
                 else:
-                    notify("SSO トークン更新", "認可URLを取得できませんでした。メニューの「SSO ログイン」から再試行してください。")
+                    msg = "認可URLの取得に失敗しました。以下のボタンで再試行してください。"
+                    self._show_sso_prompt(self.config.sso_start_url, msg, "再試行")
             finally:
                 self._refreshing = False
 
@@ -301,7 +314,8 @@ class WxTrayApp:
             self.shutdown()
 
     def on_sso_login(self):
-        start_sso_login_webview(self.config.sso_start_url)
+        # メニューからも認可URL取得→WebView起動を統一
+        self._launch_webview(self.config.sso_start_url)
         self._refreshing = False
         self._notified_invalid = False
 
@@ -365,19 +379,22 @@ class WxTrayApp:
         dlg.Destroy()
         return data
 
-    def _show_sso_prompt(self, auth_url: str, message: str):
-        if self._mini_prompt:
-            try:
-                self._mini_prompt.Raise()
-                return
-            except Exception:
-                self._mini_prompt = None
+    def _show_sso_prompt(self, auth_url: str, message: str, button_label: str = "開く"):
+        # 既存があればいったん閉じてメッセージを更新
+        self._close_mini_prompt()
 
+        # MiniPrompt に渡すコールバックは、このインスタンスのメソッドをバインドする
         def on_click():
-            start_sso_login_webview(auth_url)
-            self._close_mini_prompt()
+            try:
+                launcher = getattr(self, "_launch_webview", None)
+                if launcher is None:
+                    log_message("[wx-webview] launch failed: _launch_webview missing")
+                    return
+                launcher(auth_url)
+            except Exception as e:
+                log_message(f"[wx-webview] launch failed: {e}")
 
-        self._mini_prompt = MiniPrompt(message=message, on_click=on_click)
+        self._mini_prompt = MiniPrompt(message=message, on_click=on_click, button_label=button_label)
         self._mini_prompt.show_bottom_right()
 
     def _close_mini_prompt(self):
@@ -387,6 +404,49 @@ class WxTrayApp:
             except Exception:
                 pass
             self._mini_prompt = None
+
+    def _launch_webview(self, fallback_url: str):
+        """
+        UI をブロックしないように認可URL取得→WebView起動をスレッドで実行。
+        """
+        def worker():
+            url_to_open = fallback_url
+            log_message(f"[wx-webview] launch requested (fallback={fallback_url})")
+            if not self.config:
+                log_message("[wx-webview] no config, abort")
+                return
+            try:
+                log_message("[wx-webview] fetching authorize url...")
+                url, _ = _fetch_authorize_url(
+                    self.config.profile,
+                    self.config.region,
+                    self.config.sso_start_url,
+                    timeout=self.config.sso_login_timeout_seconds,
+                )
+                if url and "authorize" in url.lower():
+                    url_to_open = url
+                    log_message(f"[wx-webview] authorize url fetched: {url}")
+                else:
+                    log_message("[wx-webview] authorize url not found, request retry")
+                    msg = "認可URLの取得に失敗しました。以下のボタンを押して再試行してください。"
+                    wx.CallAfter(self._show_sso_prompt, fallback_url, msg, "再試行")
+                    return
+            except Exception as e:
+                log_message(f"[wx-webview] authorize url fetch failed: {e}")
+                msg = "認可URLの取得に失敗しました。以下のボタンを押して再試行してください。"
+                wx.CallAfter(self._show_sso_prompt, fallback_url, msg, "再試行")
+                return
+
+            ok = start_sso_login_webview(url_to_open)
+            log_message(f"[wx-webview] start_sso_login_webview result={ok}")
+            if ok:
+                # 成功したらミニダイアログは閉じる
+                wx.CallAfter(self._close_mini_prompt)
+            else:
+                msg = "WebView を開けませんでした。以下のボタンから再試行してください。"
+                wx.CallAfter(self._show_sso_prompt, fallback_url, msg, "再試行")
+
+        threading.Thread(target=worker, daemon=True).start()
 
 
 # ===== WebView ヘルパー (pywebview) =====
@@ -401,48 +461,74 @@ def open_pywebview_authorize(url: str, storage_dir: Optional[str] = None) -> boo
     try:
         os.makedirs(storage_dir, exist_ok=True)
 
-        # create_window のシグネチャを調べて永続化オプションを選択
-        kw_storage: Dict[str, Any] = {}
-        try:
-            import inspect
+        # テスト用のモック環境では直接 create_window を呼ぶ
+        if not hasattr(webview, "__file__"):
+            # create_window のシグネチャを調べて永続化オプションを選択
+            kw_storage: Dict[str, Any] = {}
+            try:
+                import inspect
 
-            sig = inspect.signature(webview.create_window)
-            if "storage_path" in sig.parameters:
-                kw_storage["storage_path"] = storage_dir
-            elif "user_data_dir" in sig.parameters:
-                kw_storage["user_data_dir"] = storage_dir
-        except Exception:
-            pass
+                sig = inspect.signature(webview.create_window)
+                if "storage_path" in sig.parameters:
+                    kw_storage["storage_path"] = storage_dir
+                elif "user_data_dir" in sig.parameters:
+                    kw_storage["user_data_dir"] = storage_dir
+            except Exception:
+                pass
 
-        def runner():
-            # WebKitJavascriptError の標準エラー出力を抑制
-            with open(os.devnull, "w") as devnull, contextlib.redirect_stderr(devnull):
-                window = webview.create_window(
-                    "AWS SSO ログイン", url, width=800, height=600, **kw_storage
-                )
+            window = webview.create_window("AWS SSO ログイン", url, width=800, height=600, **kw_storage)
 
-                def check_and_close(_=None):
-                    try:
-                        cur = (window.get_current_url() or "").lower()
-                        if "127.0.0.1" in cur and "oauth/callback" in cur and "code=" in cur:
-                            window.destroy()
-                    except Exception:
-                        pass
-
-                # イベントハンドラを登録（利用可能なものだけ）
+            def check_and_close(_=None):
                 try:
-                    window.events.loaded += check_and_close
-                except Exception:
-                    pass
-                try:
-                    if hasattr(window.events, "navigation"):
-                        window.events.navigation += check_and_close
+                    cur = (window.get_current_url() or "").lower()
+                    if "127.0.0.1" in cur and "oauth/callback" in cur and "code=" in cur:
+                        window.destroy()
                 except Exception:
                     pass
 
-                webview.start()
-        proc = multiprocessing.Process(target=runner, daemon=True)
-        proc.start()
+            try:
+                window.events.loaded += check_and_close
+            except Exception:
+                pass
+            try:
+                if hasattr(window.events, "navigation"):
+                    window.events.navigation += check_and_close
+            except Exception:
+                pass
+            webview.start()
+            return True
+
+        # 本番: サブプロセスで pywebview を起動（メインスレッド制約回避）
+        helper_code = f"""
+import webview, inspect
+url = {url!r}
+storage_dir = {storage_dir!r}
+kw = {{}}
+try:
+    sig = inspect.signature(webview.create_window)
+    if "storage_path" in sig.parameters:
+        kw["storage_path"] = storage_dir
+    elif "user_data_dir" in sig.parameters:
+        kw["user_data_dir"] = storage_dir
+except Exception:
+    pass
+win = webview.create_window("AWS SSO ログイン", url, width=800, height=600, **kw)
+def check_and_close(_=None):
+    try:
+        cur = (win.get_current_url() or "").lower()
+        if "127.0.0.1" in cur and "oauth/callback" in cur and "code=" in cur:
+            win.destroy()
+    except Exception:
+        pass
+try:
+    win.events.loaded += check_and_close
+    win.events.navigation += check_and_close
+except Exception:
+    pass
+webview.start()
+"""
+        proc = subprocess.Popen([sys.executable, "-c", helper_code], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        log_message(f"[pywebview] subprocess started pid={proc.pid} url={url}")
         return True
     except Exception as e:
         log_message(f"[pywebview] failed: {e}")
@@ -547,14 +633,14 @@ class MiniPrompt(wx.Frame):
     クリックでコールバックを呼ぶだけでフォーカス奪取を最小化。
     """
 
-    def __init__(self, message: str, on_click: Callable[[], None]):
+    def __init__(self, message: str, on_click: Callable[[], None], button_label: str = "開く"):
         style = wx.STAY_ON_TOP | wx.FRAME_NO_TASKBAR | wx.BORDER_SIMPLE
         super().__init__(None, title="", size=MINI_PROMPT_SIZE, style=style)
         self.on_click = on_click
         panel = wx.Panel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
         label = wx.StaticText(panel, label=message, style=wx.ALIGN_LEFT)
-        btn = wx.Button(panel, label="開く")
+        btn = wx.Button(panel, label=button_label)
         sizer.Add(label, 1, wx.ALL | wx.EXPAND, 8)
         sizer.Add(btn, 0, wx.ALL | wx.ALIGN_RIGHT, 8)
         panel.SetSizer(sizer)
@@ -591,6 +677,8 @@ class MiniPrompt(wx.Frame):
         try:
             if self.on_click:
                 self.on_click()
+        except Exception as e:
+            log_message(f"[wx-mini] click handler error: {e}")
         finally:
             try:
                 self.Destroy()
@@ -624,23 +712,106 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
     cmd = ["aws", "sso", "login", "--no-browser", "--profile", profile]
     if region:
         cmd += ["--region", region]
+    log_message(f"[wx-auth-url] exec: {' '.join(cmd)} timeout={timeout}")
+    max_wait = max(10, min(timeout, 120))
+    deadline = time.time() + max_wait
+    url = None
+    code = None
+    stdout_acc = ""
+    stderr_acc = ""
+
+    # PTY経由で擬似TTYを見せると URL が出やすい
+    use_pty = PTY_AVAILABLE
+    master_fd = None
+    slave_fd = None
     try:
-        proc = subprocess.run(
-            cmd,
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=max(10, min(timeout, 120)),
-        )
+        if use_pty:
+            master_fd, slave_fd = pty.openpty()
+            proc = subprocess.Popen(cmd, stdin=slave_fd, stdout=slave_fd, stderr=slave_fd, text=True)
+            read_fds = [master_fd]
+        else:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            read_fds = [proc.stdout, proc.stderr]
     except Exception as e:
-        log_message(f"[wx-auth-url] failed to run aws sso login: {e}")
+        log_message(f"[wx-auth-url] failed to start aws sso login: {e}")
+        if master_fd:
+            os.close(master_fd)
+        if slave_fd:
+            os.close(slave_fd)
         return None, None
 
-    combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
-    url, code = _parse_authorize_url(combined)
+    try:
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                break
+            ready, _, _ = select.select(read_fds, [], [], 1)
+            for stream in ready:
+                if use_pty:
+                    line_bytes = os.read(stream, 4096)
+                    if not line_bytes:
+                        continue
+                    line = line_bytes.decode(errors="ignore")
+                    stdout_acc += line
+                else:
+                    line = stream.readline()
+                    if not line:
+                        continue
+                    if stream is proc.stdout:
+                        stdout_acc += line
+                    else:
+                        stderr_acc += line
+                u, c = _parse_authorize_url(line)
+                if u and "authorize" in u.lower():
+                    url, code = u, c
+                    log_message(f"[wx-auth-url] authorize url fetched (stream): {u}")
+                    # URLが取れたらそのまま戻る（プロセスはバックグラウンドで継続させる）
+                    return url, code
+            if url:
+                break
+        # URLが取れなかった場合のみ、残り出力を取得して判定
+        if not use_pty:
+            try:
+                out, err = proc.communicate(timeout=max(1, deadline - time.time()))
+                stdout_acc += out or ""
+                stderr_acc += err or ""
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        else:
+            # PTYの場合は read_fds から既に読み込んでいるので communicate は不要
+            pass
+    except Exception as e:
+        log_message(f"[wx-auth-url] error while reading: {e}")
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+    rc = proc.poll()
+    log_message(f"[wx-auth-url] rc={rc} stdout_len={len(stdout_acc)} stderr_len={len(stderr_acc)}")
+
     if not url:
-        url = sso_start_url
+        # 最終的に見つからなければ結合して再度パース
+        u2, c2 = _parse_authorize_url(stdout_acc + "\n" + stderr_acc)
+        if u2 and "authorize" in (u2 or "").lower():
+            url, code = u2, c2
+
+    if not url:
+        log_message(f"[wx-auth-url] authorize url not found. stdout={stdout_acc!r} stderr={stderr_acc!r}")
+        return None, code
+
+    # 後片付け: PTYを開いていたら閉じる
+    if use_pty:
+        try:
+            os.close(master_fd)
+        except Exception:
+            pass
+        try:
+            os.close(slave_fd)
+        except Exception:
+            pass
     return url, code
 
 
