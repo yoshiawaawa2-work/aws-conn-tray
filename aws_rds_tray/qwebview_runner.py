@@ -16,8 +16,10 @@ try:
     from PySide6.QtWebEngineWidgets import QWebEngineView, QWebEngineProfile, QWebEnginePage
 
     QT_AVAILABLE = True
-except Exception:
+    QT_IMPORT_ERROR = ""
+except Exception as e:
     QT_AVAILABLE = False
+    QT_IMPORT_ERROR = str(e)
 
 DEFAULT_STORAGE = os.path.expanduser("~/.cache/aws-rds-tray/qt-webview")
 
@@ -33,7 +35,7 @@ def _is_callback_url(url_str: str) -> bool:
 
 def run_webview(authorize_url: str, storage_path: Optional[str] = None) -> int:
     if not QT_AVAILABLE:
-        sys.stderr.write("PySide6 / QtWebEngine が利用できません。\n")
+        sys.stderr.write(f"PySide6 / QtWebEngine が利用できません: {QT_IMPORT_ERROR}\n")
         return 1
 
     app = QApplication(sys.argv)

@@ -11,6 +11,7 @@ pytest-xvfb
 pywebview==5.0.4
 PySide6
 PySide6-Addons
+PySide6-QtWebEngine
 
 # ビルドツール
 pyinstaller
