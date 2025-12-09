@@ -8,7 +8,7 @@ mypy
 pytest
 pytest-mock
 pytest-xvfb
-pywebview
+pywebview==5.0.4
 
 # ビルドツール
 pyinstaller
