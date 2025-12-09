@@ -78,7 +78,6 @@ def test_start_sso_login_webview_fallback(monkeypatch):
     # open_pywebview_authorize が False を返した場合にブラウザフォールバックと通知が呼ばれるか
     called = {}
     monkeypatch.setattr(wx_tray, "open_pywebview_authorize", lambda url: False)
-    monkeypatch.setattr(wx_tray, "webbrowser", types.SimpleNamespace(open=lambda url: called.setdefault("opened", url)))
 
     def fake_notify(title, message, on_click=None):
         called["notify"] = (title, message)
@@ -91,6 +90,27 @@ def test_start_sso_login_webview_fallback(monkeypatch):
     assert ok is False
     assert "notify" in called
     assert "WebView" in called["notify"][1]
+
+
+def test_on_sso_login_uses_webview(monkeypatch):
+    # メニュー「SSO ログイン」で認可URLを取得し、_launch_webview が呼ばれること
+    app = _bare_app()
+    app.config = type(
+        "C",
+        (),
+        {
+            "profile": "p",
+            "region": "r",
+            "sso_start_url": "https://start.example.com",
+            "sso_login_timeout_seconds": 30,
+        },
+    )()
+
+    called = {}
+    app._launch_webview = lambda url: called.setdefault("url", url)
+
+    app.on_sso_login()
+    assert called.get("url") == "https://start.example.com"
 
 
 def test_parse_authorize_url():
@@ -203,6 +223,7 @@ def _bare_app():
     app._refreshing = False
     app._notified_invalid = False
     app._mini_prompt = None
+    app._show_sso_prompt = lambda *a, **k: None  # wx.App 未生成環境での PyNoAppError 回避
     return app
 
 
@@ -251,8 +272,10 @@ def test_refresh_webview_fallback(monkeypatch):
     monkeypatch.setattr(wx_tray, "_fetch_authorize_url", lambda *a, **k: (None, None))
     monkeypatch.setattr(wx_tray, "start_sso_login_webview", lambda url: False)
     monkeypatch.setattr(wx_tray, "notify", lambda t, m, on_click=None: called.setdefault("notify", (t, m)))
+    # ミニダイアログは _show_sso_prompt モックで抑制し、呼ばれたことだけ確認
+    app._show_sso_prompt = lambda url, msg, btn="開く": called.setdefault("prompt", (url, msg, btn))
     wx_tray.WxTrayApp._start_sso_refresh(app)
-    assert called["notify"][0].startswith("SSO トークン更新")
+    assert "prompt" in called  # 認可URL取得失敗で再試行ダイアログが呼ばれる
 
 
 def test_ssm_reconnect_and_icon(monkeypatch):
