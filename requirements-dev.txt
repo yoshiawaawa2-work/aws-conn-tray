@@ -9,6 +9,8 @@ pytest
 pytest-mock
 pytest-xvfb
 pywebview==5.0.4
+PySide6
+PySide6-Addons
 
 # ビルドツール
 pyinstaller
