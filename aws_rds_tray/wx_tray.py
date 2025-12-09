@@ -685,23 +685,31 @@ class MiniPrompt(wx.Frame):
         style = wx.STAY_ON_TOP | wx.FRAME_NO_TASKBAR | wx.BORDER_SIMPLE
         super().__init__(None, title="", size=MINI_PROMPT_SIZE, style=style)
         self.on_click = on_click
-        # 最低サイズを少し広めに確保して文字切れとボタン重なりを防ぐ
-        self.SetSize((340, 140))
-        self.SetMinSize((340, 140))
+        # 最低サイズを広めに確保して文字切れとボタン重なりを防ぐ
+        self.SetSize((380, 150))
+        self.SetMinSize((380, 150))
         panel = wx.Panel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
         label = wx.StaticText(panel, label=message, style=wx.ALIGN_LEFT)
+        # 読みやすいフォントに調整
+        font = label.GetFont()
+        font.SetPointSize(max(10, font.GetPointSize() + 1))
+        font.SetWeight(wx.FONTWEIGHT_BOLD)
+        label.SetFont(font)
         # 長い文言でも折り返す
-        label.Wrap(self.GetClientSize().width - 20)
+        label.Wrap(self.GetClientSize().width - 24)
         btn = wx.Button(panel, label=button_label)
-        sizer.Add(label, 0, wx.ALL | wx.EXPAND, 8)
+        btn_font = btn.GetFont()
+        btn_font.SetPointSize(max(10, btn_font.GetPointSize() + 1))
+        btn.SetFont(btn_font)
+        sizer.Add(label, 0, wx.ALL | wx.EXPAND, 10)
         sizer.AddStretchSpacer()
-        sizer.Add(btn, 0, wx.ALL | wx.ALIGN_RIGHT, 8)
+        sizer.Add(btn, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
         panel.SetSizer(sizer)
 
         # 半透明（可能な環境のみ）
         try:
-            self.SetTransparent(220)
+            self.SetTransparent(180)
         except Exception:
             pass
 
