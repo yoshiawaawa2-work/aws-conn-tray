@@ -266,7 +266,8 @@ class WxTrayApp:
         else:
             # トークン無効時はミニダイアログで WebView 誘導
             if not self._notified_invalid:
-                self._show_sso_prompt(self.config.sso_start_url, "SSO トークンが無効です")
+                msg = "SSO トークンが無効です。\n右下の「開く」またはメニューの「SSO ログイン」から再認証してください。"
+                self._show_sso_prompt(self.config.sso_start_url, msg)
                 log_message("[wx-monitor] token invalid, prompting login")
                 self._notified_invalid = True
             self.tray_icon.set_icon_color("red")
@@ -684,6 +685,8 @@ class MiniPrompt(wx.Frame):
     def __init__(self, message: str, on_click: Callable[[], None], button_label: str = "開く"):
         style = wx.STAY_ON_TOP | wx.FRAME_NO_TASKBAR | wx.BORDER_SIMPLE
         super().__init__(None, title="", size=MINI_PROMPT_SIZE, style=style)
+        # 念のため常に最前面フラグを維持
+        self.SetWindowStyleFlag(self.GetWindowStyle() | wx.STAY_ON_TOP)
         self.on_click = on_click
         # さらに広い最小サイズでテキスト切れを防止
         self.SetSize((500, 200))
@@ -712,7 +715,7 @@ class MiniPrompt(wx.Frame):
 
         # 半透明（可能な環境のみ）
         try:
-            self.SetTransparent(160)
+            self.SetTransparent(190)
         except Exception:
             pass
 
