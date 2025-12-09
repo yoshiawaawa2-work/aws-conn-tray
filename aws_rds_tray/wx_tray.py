@@ -689,9 +689,10 @@ class MiniPrompt(wx.Frame):
         self.SetWindowStyleFlag(self.GetWindowStyle() | wx.STAY_ON_TOP)
         self.on_click = on_click
         # さらに広い最小サイズでテキスト切れを防止
-        self.SetSize((500, 200))
-        self.SetMinSize((500, 200))
+        self.SetSize((520, 200))
+        self.SetMinSize((520, 200))
         panel = wx.Panel(self)
+        panel.SetBackgroundColour(wx.Colour(245, 245, 245))
         sizer = wx.BoxSizer(wx.VERTICAL)
         label = wx.StaticText(panel, label=message, style=wx.ALIGN_LEFT)
         # 読みやすいフォントに調整
@@ -700,8 +701,8 @@ class MiniPrompt(wx.Frame):
         font.SetWeight(wx.FONTWEIGHT_BOLD)
         label.SetFont(font)
         label.SetForegroundColour(wx.Colour(0, 0, 0))
-        # 長い文言でも折り返す（ボーダーと余白を考慮し少し広めに）
-        label.Wrap(self.GetSize().width - 80)
+        # 長い文言でも折り返す（ボーダーと余白を考慮し広めに）
+        label.Wrap(460)
         btn = wx.Button(panel, label=button_label)
         btn_font = btn.GetFont()
         btn_font.SetPointSize(max(12, btn_font.GetPointSize() + 3))
