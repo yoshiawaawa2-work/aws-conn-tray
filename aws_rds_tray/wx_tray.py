@@ -685,13 +685,16 @@ class MiniPrompt(wx.Frame):
         style = wx.STAY_ON_TOP | wx.FRAME_NO_TASKBAR | wx.BORDER_SIMPLE
         super().__init__(None, title="", size=MINI_PROMPT_SIZE, style=style)
         self.on_click = on_click
+        # 最低サイズを少し広めに確保して文字切れとボタン重なりを防ぐ
+        self.SetMinSize((320, 120))
         panel = wx.Panel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
         label = wx.StaticText(panel, label=message, style=wx.ALIGN_LEFT)
         # 長い文言でも折り返す
-        label.Wrap(self.GetSize().width - 20)
+        label.Wrap(280)
         btn = wx.Button(panel, label=button_label)
-        sizer.Add(label, 1, wx.ALL | wx.EXPAND, 8)
+        sizer.Add(label, 0, wx.ALL | wx.EXPAND, 8)
+        sizer.AddStretchSpacer()
         sizer.Add(btn, 0, wx.ALL | wx.ALIGN_RIGHT, 8)
         panel.SetSizer(sizer)
 
