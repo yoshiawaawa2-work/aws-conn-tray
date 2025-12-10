@@ -128,14 +128,15 @@ def test_notify_token_invalid_message(monkeypatch):
     app.config = type(
         "C",
         (),
-        {
-            "profile": "p",
-            "region": "r",
-            "tunnel_check_interval_seconds": 1,
-            "sso_auto_refresh_margin_seconds": 300,
-            "sso_start_url": "https://example.com/start",
-        },
-    )()
+            {
+                "profile": "p",
+                "region": "r",
+                "tunnel_check_interval_seconds": 1,
+                "sso_auto_refresh_margin_seconds": 300,
+                "sso_start_url": "https://example.com/start",
+                "local_port": 1111,
+            },
+        )()
     app.tray_icon = type("T", (), {"set_icon_color": lambda self, c: None})()
     app.ssm = None
     app._refreshing = False
@@ -203,6 +204,7 @@ def test_monitor_triggers_refresh_when_margin(monkeypatch):
             "tunnel_check_interval_seconds": 1,
             "sso_auto_refresh_margin_seconds": 300,
             "sso_start_url": "https://example.com/start",
+            "local_port": 1111,
         },
     )()
     called = {}
@@ -268,6 +270,7 @@ def test_ssm_reconnect_and_icon(monkeypatch):
             "tunnel_check_interval_seconds": 1,
             "sso_auto_refresh_margin_seconds": 300,
             "sso_start_url": "https://example.com/start",
+            "local_port": 1111,
         },
     )()
     monkeypatch.setattr(wx_tray, "check_sso_token", lambda *a, **k: (True, 1000))

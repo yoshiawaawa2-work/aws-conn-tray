@@ -166,6 +166,9 @@ class WxTrayApp:
         self._last_webview_frame: Optional[wx.Frame] = None
         self._mini_prompt: Optional["MiniPrompt"] = None
         self._webview_running = False
+        self._port_notified = False
+        self._port_retry_count = 0
+        self._shutting_down = False
 
     def OnInit(self):
         return True
@@ -214,6 +217,7 @@ class WxTrayApp:
         return self._app.IsMainLoopRunning()
 
     def shutdown(self):
+        self._shutting_down = True
         if self.tray_icon:
             try:
                 self.tray_icon.Destroy()
@@ -229,15 +233,34 @@ class WxTrayApp:
                 self.timer.Stop()
             except Exception:
                 pass
+        if self.ssm:
+            try:
+                if self.ssm.is_alive():
+                    self.ssm.stop()
+                else:
+                    # 念のため stop でプロセスを明示的に解放
+                    self.ssm.stop()
+            except Exception as e:
+                log_message(f"[ssm] stop during shutdown failed: {e}")
         try:
             self._app.ExitMainLoop()
         except Exception:
-            pass
+            try:
+                wx.CallAfter(self._app.ExitMainLoop)
+            except Exception:
+                pass
 
     # ===== 監視ロジック =====
     def monitor_once(self):
         if not self.config:
             return
+        if getattr(self, "_shutting_down", False):
+            return
+        # ensure counters exist even in test-made instances
+        if not hasattr(self, "_port_retry_count"):
+            self._port_retry_count = 0
+        if not hasattr(self, "_port_notified"):
+            self._port_notified = False
 
         token_ok, remaining = check_sso_token(expected_start_url=self.config.sso_start_url)
         if token_ok and not is_sso_session_valid(self.config.profile, self.config.region):
@@ -261,8 +284,27 @@ class WxTrayApp:
             self._close_mini_prompt()
             if not tunnel_ok and self.ssm:
                 self.tray_icon.set_icon_color("yellow")
-                self.ssm.start()
+                started = self.ssm.start()
+                if not started:
+                    self._port_retry_count += 1
+                    if not self._port_notified:
+                        notify("ポートフォワード", f"ローカルポート {self.config.local_port} が使用中です。")
+                        self._port_notified = True
+                    if self._port_retry_count >= 3:
+                        msg = f"ローカルポート {self.config.local_port} が使用中です。アプリを終了します。"
+                        notify("ポートフォワード", msg)
+                        log_message("[ssm] port still in use after retries -> shutdown")
+                        self.tray_icon.set_icon_color("red")
+                        self._shutting_down = True
+                        wx.CallAfter(self.shutdown)
+                        return
+                    self.tray_icon.set_icon_color("red")
+                else:
+                    self._port_notified = False
+                    self._port_retry_count = 0
             elif tunnel_ok:
+                self._port_notified = False
+                self._port_retry_count = 0
                 self.tray_icon.set_icon_color("green")
         else:
             # トークン無効時はミニダイアログで WebView 誘導
@@ -326,7 +368,16 @@ class WxTrayApp:
     def on_reconnect(self):
         if self.ssm and not self.ssm.is_alive():
             self.tray_icon.set_icon_color("yellow")
-            self.ssm.start()
+            started = self.ssm.start()
+            if not started:
+                notify("ポートフォワード", f"ローカルポート {self.config.local_port} が使用中です。")
+                self.tray_icon.set_icon_color("red")
+                self._port_retry_count += 1
+                if self._port_retry_count >= 3:
+                    msg = f"ローカルポート {self.config.local_port} が使用中です。アプリを終了します。"
+                    notify("ポートフォワード", msg)
+                    log_message(f"[ssm] port still in use after retries -> shutdown")
+                    wx.CallAfter(self.shutdown)
         else:
             notify("ポートフォワード", "すでにポートフォワードは有効です。")
 
