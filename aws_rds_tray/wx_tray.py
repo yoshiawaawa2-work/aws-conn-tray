@@ -165,6 +165,7 @@ class WxTrayApp:
         self._notified_invalid = False
         self._last_webview_frame: Optional[wx.Frame] = None
         self._mini_prompt: Optional["MiniPrompt"] = None
+        self._webview_running = False
 
     def OnInit(self):
         return True
@@ -388,14 +389,17 @@ class WxTrayApp:
 
         # MiniPrompt に渡すコールバックは、このインスタンスのメソッドをバインドする
         def on_click():
+            if self._webview_running:
+                log_message("[webview-launch] skipped: webview already running")
+                return
             try:
                 launcher = getattr(self, "_launch_webview", None)
                 if launcher is None:
-                    log_message("[wx-webview] launch failed: _launch_webview missing")
+                    log_message("[webview-launch] failed: _launch_webview missing")
                     return
                 launcher(auth_url)
             except Exception as e:
-                log_message(f"[wx-webview] launch failed: {e}")
+                log_message(f"[webview-launch] failed: {e}")
 
         self._mini_prompt = MiniPrompt(message=message, on_click=on_click, button_label=button_label)
         self._mini_prompt.show_bottom_right()
@@ -413,41 +417,45 @@ class WxTrayApp:
         UI をブロックしないように認可URL取得→WebView起動をスレッドで実行。
         """
         def worker():
-            url_to_open = fallback_url
-            log_message(f"[wx-webview] launch requested (fallback={fallback_url})")
-            if not self.config:
-                log_message("[wx-webview] no config, abort")
-                return
+            self._webview_running = True
             try:
-                log_message("[wx-webview] fetching authorize url...")
-                url, _ = _fetch_authorize_url(
-                    self.config.profile,
-                    self.config.region,
-                    self.config.sso_start_url,
-                    timeout=self.config.sso_login_timeout_seconds,
-                )
-                if url and "authorize" in url.lower():
-                    url_to_open = url
-                    log_message(f"[wx-webview] authorize url fetched: {url}")
-                else:
-                    log_message("[wx-webview] authorize url not found, request retry")
+                url_to_open = fallback_url
+                log_message(f"[webview-launch] requested (fallback={fallback_url})")
+                if not self.config:
+                    log_message("[webview-launch] no config, abort")
+                    return
+                try:
+                    log_message("[webview-launch] fetching authorize url...")
+                    url, _ = _fetch_authorize_url(
+                        self.config.profile,
+                        self.config.region,
+                        self.config.sso_start_url,
+                        timeout=self.config.sso_login_timeout_seconds,
+                    )
+                    if url and "authorize" in url.lower():
+                        url_to_open = url
+                        log_message(f"[webview-launch] authorize url fetched: {url}")
+                    else:
+                        log_message("[webview-launch] authorize url not found, request retry")
+                        msg = "認可URLの取得に失敗しました。以下のボタンを押して再試行してください。"
+                        wx.CallAfter(self._show_sso_prompt, fallback_url, msg, "再試行")
+                        return
+                except Exception as e:
+                    log_message(f"[webview-launch] authorize url fetch failed: {e}")
                     msg = "認可URLの取得に失敗しました。以下のボタンを押して再試行してください。"
                     wx.CallAfter(self._show_sso_prompt, fallback_url, msg, "再試行")
                     return
-            except Exception as e:
-                log_message(f"[wx-webview] authorize url fetch failed: {e}")
-                msg = "認可URLの取得に失敗しました。以下のボタンを押して再試行してください。"
-                wx.CallAfter(self._show_sso_prompt, fallback_url, msg, "再試行")
-                return
 
-            ok = start_sso_login_webview(url_to_open)
-            log_message(f"[wx-webview] start_sso_login_webview result={ok}")
-            if ok:
-                # 成功したらミニダイアログは閉じる
-                wx.CallAfter(self._close_mini_prompt)
-            else:
-                msg = "WebView を開けませんでした。以下のボタンから再試行してください。"
-                wx.CallAfter(self._show_sso_prompt, fallback_url, msg, "再試行")
+                ok = start_sso_login_webview(url_to_open)
+                log_message(f"[webview-launch] start_sso_login_webview result={ok}")
+                if ok:
+                    # 成功したらミニダイアログは閉じる
+                    wx.CallAfter(self._close_mini_prompt)
+                else:
+                    msg = "WebView を開けませんでした。以下のボタンから再試行してください。"
+                    wx.CallAfter(self._show_sso_prompt, fallback_url, msg, "再試行")
+            finally:
+                self._webview_running = False
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -557,16 +565,27 @@ def open_qt_webview_authorize(url: str, storage_dir: Optional[str] = None) -> bo
     ]
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        log_message(f"[qt-webview] subprocess start url={url} storage={storage_dir}")
+        log_message(
+            "[qt-webview] subprocess start "
+            f"url={url} storage={storage_dir} "
+            f"env_flags={{QTWEBENGINE_CHROMIUM_FLAGS={os.environ.get('QTWEBENGINE_CHROMIUM_FLAGS')}, "
+            f"LIBVA_DRIVER_NAME={os.environ.get('LIBVA_DRIVER_NAME')}}}"
+        )
+
+        def _wait_and_log(p: subprocess.Popen):
+            try:
+                out, err = p.communicate()
+                rc = p.returncode
+                log_message(f"[qt-webview] exit rc={rc} stdout={out!r} stderr={err!r}")
+            except Exception as e:
+                log_message(f"[qt-webview] wait error: {e}")
+
+        threading.Thread(target=_wait_and_log, args=(proc,), daemon=True).start()
+
         # すぐに落ちていないか簡易チェック（依存不足など）
         time.sleep(0.5)
         rc = proc.poll()
         if rc not in (None, 0):
-            try:
-                out, err = proc.communicate(timeout=1)
-            except Exception:
-                out, err = "", ""
-            log_message(f"[qt-webview] exited early rc={rc} stdout={out!r} stderr={err!r}")
             return False
         return True
     except Exception as e:

@@ -39,6 +39,7 @@ def run_webview(authorize_url: str, storage_path: Optional[str] = None) -> int:
         sys.stderr.write(f"PySide6 / QtWebEngine が利用できません: {QT_IMPORT_ERROR}\n")
         return 1
 
+    sys.stderr.write(f"[qwebview] start url={authorize_url} storage={storage_path or DEFAULT_STORAGE}\n")
     app = QApplication(sys.argv)
     profile = QWebEngineProfile("aws-rds-tray")
     storage_dir = storage_path or DEFAULT_STORAGE
@@ -56,14 +57,18 @@ def run_webview(authorize_url: str, storage_path: Optional[str] = None) -> int:
     view.load(QUrl(authorize_url))
 
     def handle_url(qurl: QUrl):
-        if _is_callback_url(qurl.toString()):
+        url_str = qurl.toString()
+        sys.stderr.write(f"[qwebview] urlChanged {url_str}\n")
+        if _is_callback_url(url_str):
+            sys.stderr.write("[qwebview] callback detected -> quit\n")
             view.close()
             app.quit()
 
     # URL変化でコールバック検知
     view.urlChanged.connect(handle_url)
     view.show()
-    app.exec()
+    rc = app.exec()
+    sys.stderr.write(f"[qwebview] app.exec() finished rc={rc}\n")
     return 0
 
 
