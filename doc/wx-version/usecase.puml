@@ -1,0 +1,26 @@
+@startuml usecase_wx_app
+title ユースケース図（wx版）
+
+actor User
+actor "AWS SSO" as SSO
+actor "AWS SSM/RDS" as SSM
+
+rectangle "aws-rds-tray (wx版)" {
+  usecase "設定を編集する\n(⚙️設定)" as UC_Config
+  usecase "SSO ログインを行う\n(WebView 認可)" as UC_SSO
+  usecase "ポートフォワードを再接続" as UC_Reconnect
+  usecase "状態をトレイに表示\n(アイコン色/通知/ミニダイアログ)" as UC_Status
+  usecase "終了する" as UC_Quit
+}
+
+User --> UC_Config
+User --> UC_SSO
+User --> UC_Reconnect
+User --> UC_Status
+User --> UC_Quit
+
+UC_SSO --> SSO : 認可URL/トークン更新\n(aws sso login --no-browser)
+UC_Reconnect --> SSM : SSMポートフォワード再接続
+UC_Status --> SSM : 状態監視
+
+@enduml

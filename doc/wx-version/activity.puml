@@ -1,0 +1,35 @@
+@startuml activity_wx_app
+title アクティビティ図（起動→監視→終了）
+
+start
+:設定読込/前提チェック;
+if (SSOトークン有効?) then (Yes)
+  :トレイ起動(緑/黄);
+else (No)
+  :ミニダイアログ表示\n(開く/再試行);
+  :認可URL取得;
+  if (取得成功?) then (Yes)
+    :Qt WebViewで認可;
+    :callback検知でクローズ;
+  else (No)
+    :ブラウザで開く;
+  endif
+endif
+
+repeat
+  :SSOトークン残時間チェック;
+  if (margin内?) then (Yes)
+    :再認証誘導\n(ミニダイアログ+WebView);
+  endif
+  :SSMポートフォワード状態確認;
+  if (切断?) then (Yes)
+    :再接続(黄→緑目指す);
+  else (No)
+    :緑維持;
+  endif
+repeat while (終了選択されない)
+
+:終了(終了メニュー/ダイアログ);
+:SSM停止・監視停止・アイコン解放;
+stop
+@enduml
