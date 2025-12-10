@@ -4,10 +4,14 @@ from aws_rds_tray.ssm import SsmPortForward
 def test_ssm_start_calls_popen(monkeypatch):
     called = {}
 
-    def fake_popen(cmd):
+    monkeypatch.setattr("aws_rds_tray.ssm._is_port_in_use", lambda port: False)
+    monkeypatch.setattr("aws_rds_tray.ssm.notify", lambda *a, **k: None)
+
+    def fake_popen(cmd, **kwargs):
         called["cmd"] = cmd
         class P:
             def poll(self): return None
+            def terminate(self): pass
         return P()
 
     monkeypatch.setattr("aws_rds_tray.ssm.subprocess.Popen", fake_popen)
