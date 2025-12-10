@@ -1,0 +1,57 @@
+@startuml flow_wx_app
+title wx版 アプリフロー（起動→監視→終了）
+
+actor User
+participant "tray_app.py\n(エントリ)" as App
+participant "WxTrayApp\n(wx_tray.py)" as Wx
+participant "SSO Auth\n(qwebview_runner.py\nQtWebEngine サブプロセス)" as WebView
+participant "AWS CLI / SSM" as Aws
+
+== 起動 ==
+User -> App : 実行
+App -> Wx : 設定読込・前提チェック
+Wx -> Aws : SSO/SSM 前提確認\n(aws sso/ssm describe など)
+Wx -> Wx : トレイアイコン作成\nアイコン初期状態設定
+
+== トークン確認 ==
+Wx -> Wx : SSO トークン残時間確認
+alt トークン無効 or 期限切れ
+  Wx -> Wx : ミニダイアログ表示\n(開く/再試行)
+  Wx -> Aws : 認可URL取得\n(aws sso login --no-browser)
+  alt 認可URL取得成功
+    Wx -> WebView : サブプロセス起動\n(QWebEngine でURL表示)\nストレージ: ~/.cache/aws-rds-tray/qt-webview
+    WebView -> Wx : 127.0.0.1/.../callback?code=... 検知で終了
+  else 失敗
+    Wx -> User : デフォルトブラウザで開く\n(フォールバック)
+  end
+else トークン有効
+  Wx -> Wx : 監視ループへ
+end
+
+== 監視ループ ==
+loop tunnel_check_interval_seconds 毎
+  Wx -> Wx : SSO トークン残時間確認\nmargin 内なら再認証誘導
+  Wx -> Aws : SSM ポートフォワード生存確認
+  alt 切断
+    Wx -> Aws : 再接続（黄色アイコン）
+  else 正常
+    Wx -> Wx : 緑アイコン維持
+  end
+end
+
+== メニュー操作 ==
+User -> Wx : メニュー「SSO ログイン」
+Wx -> Aws : 認可URL取得 → WebView 起動\n(同上)
+
+User -> Wx : メニュー「ポートフォワード再接続」
+Wx -> Aws : SSM 再接続
+
+User -> Wx : 「⚙️ 設定」
+Wx -> User : 設定ダイアログ表示\n(保存後、再起動案内)
+
+User -> Wx : 「終了」
+Wx -> Aws : SSM 停止
+Wx -> Wx : 監視停止・アイコン解放
+Wx -> User : アプリ終了
+
+@enduml

@@ -1,0 +1,81 @@
+@startuml state_wx_app
+title 状態遷移図（wx版）
+
+[*] --> INIT : 起動
+
+state INIT {
+  [*] --> LOADING
+  LOADING : 設定読込 / 前提チェック\nSSO/SSM 前提検証
+  LOADING --> READY : 前提OK
+  LOADING --> ERROR : 前提NG\n(通知/ログ)
+}
+
+state READY {
+  [*] --> TOKEN_CHECK
+  TOKEN_CHECK : トークン確認\n(キャッシュ残時間)
+  TOKEN_CHECK --> AUTH_NEEDED : トークン無効/期限切れ
+  TOKEN_CHECK --> MONITORING : トークン有効
+}
+
+state AUTH_NEEDED {
+}
+note right of AUTH_NEEDED
+  ミニダイアログ表示 / 再試行ボタン
+end note
+AUTH_NEEDED --> AUTH_FETCH : 認可URL取得開始
+AUTH_NEEDED --> MONITORING : トークンが有効化\n(外部要因で更新)
+
+state AUTH_FETCH {
+}
+note right of AUTH_FETCH
+  aws sso login --no-browser
+  stdout から認可URLパース
+end note
+AUTH_FETCH --> AUTH_WEBVIEW : URL取得成功
+AUTH_FETCH --> AUTH_FALLBACK : 取得失敗
+
+state AUTH_WEBVIEW {
+}
+note right of AUTH_WEBVIEW
+  Qt WebViewサブプロセス起動
+  認可URLを表示
+end note
+AUTH_WEBVIEW --> MONITORING : callback検知/code取得\n(トークン生成)
+AUTH_WEBVIEW --> AUTH_FALLBACK : WebView起動失敗
+
+state AUTH_FALLBACK {
+}
+note right of AUTH_FALLBACK
+  デフォルトブラウザで
+  認可URLを開く
+end note
+AUTH_FALLBACK --> MONITORING : トークン生成（ブラウザ経由）
+
+state MONITORING {
+}
+note right of MONITORING
+  監視ループ
+  SSO残時間 / SSMトンネル監視
+end note
+MONITORING --> AUTH_NEEDED : 残時間 < margin\nまたは失効
+MONITORING --> RECONNECT : トンネル断
+MONITORING --> EXIT : 終了操作
+
+state RECONNECT {
+}
+note right of RECONNECT
+  SSM 再接続
+  アイコン黄→緑狙い
+end note
+RECONNECT --> MONITORING : 再接続完了/継続監視
+RECONNECT --> AUTH_NEEDED : トークン失効を検知
+
+state EXIT {
+}
+note right of EXIT
+  監視停止 / SSM停止
+  トレイ解放
+end note
+EXIT --> [*]
+
+@enduml

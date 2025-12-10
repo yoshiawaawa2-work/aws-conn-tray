@@ -1,0 +1,55 @@
+@startuml class_wx_app
+title クラス図（主要クラスのみ）
+
+class WxTrayApp {
+  - taskbarIcon: wx.adv.TaskBarIcon
+  - monitor_timer: wx.Timer
+  - config: Config
+  - ssm_pf: SsmPortForward
+  - token_checker: TokenChecker
+  - mini_prompt: MiniPrompt
+  + on_sso_login()
+  + on_reconnect()
+  + on_settings()
+  + on_quit()
+  + start_monitor()
+}
+
+class TokenChecker {
+  + check_token() : TokenStatus
+  + fetch_authorize_url() : str?
+  + launch_webview(url)
+  + fallback_browser(url)
+}
+
+class MiniPrompt {
+  + show_open(url)
+  + show_retry()
+  + hide()
+}
+
+class ConfigLoader {
+  + load_config() : Config
+  + validate(cfg) : bool
+}
+
+class SsmPortForward {
+  + start()
+  + stop()
+  + is_alive() : bool
+}
+
+class QWebViewRunner {
+  + run(authorize_url, storage_path)
+}
+
+WxTrayApp --> ConfigLoader : uses
+WxTrayApp --> TokenChecker : uses
+WxTrayApp --> MiniPrompt : uses
+WxTrayApp --> SsmPortForward : uses
+TokenChecker --> QWebViewRunner : start Qt WebView\n(subprocess)
+
+note "Config は config/config.json を表す DTO" as N1
+WxTrayApp .. N1
+
+@enduml
