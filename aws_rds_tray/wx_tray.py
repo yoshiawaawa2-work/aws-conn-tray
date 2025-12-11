@@ -619,13 +619,23 @@ def open_qt_webview_authorize(url: str, storage_dir: Optional[str] = None) -> bo
         "--storage-path",
         storage_dir,
     ]
+    env = os.environ.copy()
+    env.setdefault(
+        "QTWEBENGINE_CHROMIUM_FLAGS",
+        "--disable-gpu --disable-features=VaapiVideoDecoder",
+    )
+    env.setdefault("LIBVA_DRIVER_NAME", "mesa")
+    env.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env
+        )
         log_message(
             "[qt-webview] subprocess start "
             f"url={url} storage={storage_dir} "
-            f"env_flags={{QTWEBENGINE_CHROMIUM_FLAGS={os.environ.get('QTWEBENGINE_CHROMIUM_FLAGS')}, "
-            f"LIBVA_DRIVER_NAME={os.environ.get('LIBVA_DRIVER_NAME')}}}"
+            f"env_flags={{QTWEBENGINE_CHROMIUM_FLAGS={env.get('QTWEBENGINE_CHROMIUM_FLAGS')}, "
+            f"LIBVA_DRIVER_NAME={env.get('LIBVA_DRIVER_NAME')}, "
+            f"LIBGL_ALWAYS_SOFTWARE={env.get('LIBGL_ALWAYS_SOFTWARE')}}}"
         )
 
         def _wait_and_log(p: subprocess.Popen):
