@@ -3,9 +3,67 @@ import socket
 import time
 import os
 import signal
-from typing import Optional
+from typing import Optional, List
 
 from .logger import notify, log_message
+
+
+def _cleanup_lingering_sessions(reason: str = "") -> None:
+    """
+    過去の session-manager-plugin / aws ssm start-session が残っていると
+    ポートが開放されないままになるケースがあるため、起動前に掃除する。
+    """
+    patterns: List[str] = ["session-manager-plugin", "aws ssm start-session"]
+    if reason:
+        log_message(f"[ssm] cleanup lingering sessions ({reason})")
+    for pat in patterns:
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", pat],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                continue
+            pids = []
+            for line in result.stdout.splitlines():
+                try:
+                    pids.append(int(line.strip()))
+                except ValueError:
+                    continue
+            if not pids:
+                continue
+            log_message(f"[ssm] cleanup: killing lingering '{pat}' pids={pids}")
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                for pid in pids:
+                    try:
+                        os.kill(pid, sig)
+                    except ProcessLookupError:
+                        pass
+                time.sleep(0.3)
+        except Exception as e:
+            log_message(f"[ssm] cleanup error for pattern '{pat}': {e}")
+
+
+def _log_port_occupant(port: int) -> None:
+    """
+    ポートを誰が掴んでいるかをログに出力（利用可能なら ss/lsof を利用）。
+    """
+    cmds = [
+        ["ss", "-ltnp", f"sport = :{port}"],
+        ["lsof", "-i", f":{port}"],
+    ]
+    for cmd in cmds:
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+            if res.returncode == 0 and res.stdout.strip():
+                log_message(f"[ssm] port {port} occupant via {' '.join(cmd)}:\n{res.stdout.strip()}")
+                return
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            log_message(f"[ssm] port occupant check failed ({' '.join(cmd)}): {e}")
 
 
 class SsmPortForward:
@@ -21,14 +79,17 @@ class SsmPortForward:
     def start(self) -> bool:
         # 念のため既存プロセスを整理
         self.stop()
+        _cleanup_lingering_sessions("before start")
         # ローカルポート衝突を確認（他プロセスが掴んでいる場合は待機→諦める）
-        for i in range(3):
+        for i in range(10):
             if not _is_port_in_use(self.local_port):
                 break
-            log_message(f"[ssm] local port {self.local_port} in use, waiting... ({i+1}/3)")
+            log_message(f"[ssm] local port {self.local_port} in use, waiting... ({i+1}/10)")
+            _log_port_occupant(self.local_port)
             time.sleep(0.5)
         else:
             log_message(f"[ssm] local port {self.local_port} still in use; abort start-session")
+            _log_port_occupant(self.local_port)
             notify("ポートフォワード", f"ローカルポート {self.local_port} が使用中です。")
             return False
 
@@ -77,10 +138,18 @@ class SsmPortForward:
                     os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
                 except Exception:
                     pass
-            # ポート解放を待つ
-            time.sleep(0.5)
+            # ポート解放を待つ（セッションマネージャが残る場合があるため少し粘る）
+            for _ in range(20):
+                if not _is_port_in_use(self.local_port):
+                    break
+                time.sleep(0.5)
+            else:
+                log_message(f"[ssm] port {self.local_port} still in use after stop")
+                _log_port_occupant(self.local_port)
         log_message(f"[ssm] stop-session pid={self.proc.pid if self.proc else 'None'}")
         self.proc = None
+        # 念のため追加で掃除
+        _cleanup_lingering_sessions("after stop")
 
 
 def _is_port_in_use(port: int) -> bool:

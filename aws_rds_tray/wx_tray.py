@@ -26,7 +26,7 @@ from .paths import ICON_DIR, CONFIG_PATH, CONFIG_EXAMPLE_PATH, APP_ROOT
 from .logger import log_message, notify
 from .config_loader import Config, load_config
 from .sso import check_sso_token, is_sso_session_valid, start_sso_login_browser
-from .ssm import SsmPortForward
+from .ssm import SsmPortForward, _cleanup_lingering_sessions
 
 WEBVIEW_STORAGE_DIR = os.path.expanduser("~/.cache/aws-rds-tray/webview")
 QT_WEBVIEW_STORAGE_DIR = os.path.expanduser("~/.cache/aws-rds-tray/qt-webview")
@@ -242,6 +242,11 @@ class WxTrayApp:
                     self.ssm.stop()
             except Exception as e:
                 log_message(f"[ssm] stop during shutdown failed: {e}")
+        # 残存 session-manager-plugin / ssm start-session の掃除（安全のため）
+        try:
+            _cleanup_lingering_sessions("shutdown")
+        except Exception as e:
+            log_message(f"[ssm] cleanup during shutdown failed: {e}")
         try:
             self._app.ExitMainLoop()
         except Exception:
