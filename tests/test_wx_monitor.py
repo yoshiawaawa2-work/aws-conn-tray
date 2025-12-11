@@ -165,6 +165,7 @@ def test_open_pywebview_authorize(monkeypatch):
     class DummyPopen:
         def __init__(self, args, stdout=None, stderr=None, **kwargs):
             created["args"] = args
+            created["env"] = kwargs.get("env")
             self._rc = None
         def poll(self):
             return self._rc
@@ -180,6 +181,12 @@ def test_open_pywebview_authorize(monkeypatch):
     cmd = created["args"]
     assert "-m" in cmd and "aws_rds_tray.qwebview_runner" in cmd
     assert "/tmp/test-webview" in cmd
+    env = created["env"]
+    assert env is not None
+    # デフォルトで GPU/VA-API を無効化しソフトウェアレンダにするフラグが渡される
+    assert env.get("QTWEBENGINE_CHROMIUM_FLAGS") == "--disable-gpu --disable-features=VaapiVideoDecoder"
+    assert env.get("LIBVA_DRIVER_NAME") == "mesa"
+    assert env.get("LIBGL_ALWAYS_SOFTWARE") == "1"
 
 
 def _bare_app():

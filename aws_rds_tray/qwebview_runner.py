@@ -39,6 +39,17 @@ def run_webview(authorize_url: str, storage_path: Optional[str] = None) -> int:
         sys.stderr.write(f"PySide6 / QtWebEngine が利用できません: {QT_IMPORT_ERROR}\n")
         return 1
 
+    # GPU/VA-API でクラッシュする環境があるため、ソフトウェアレンダリングをデフォルトで強制
+    os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --disable-features=VaapiVideoDecoder")
+    os.environ.setdefault("LIBVA_DRIVER_NAME", "mesa")
+    os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+    sys.stderr.write(
+        "[qwebview] env "
+        f"QTWEBENGINE_CHROMIUM_FLAGS={os.environ.get('QTWEBENGINE_CHROMIUM_FLAGS')} "
+        f"LIBVA_DRIVER_NAME={os.environ.get('LIBVA_DRIVER_NAME')} "
+        f"LIBGL_ALWAYS_SOFTWARE={os.environ.get('LIBGL_ALWAYS_SOFTWARE')}\n"
+    )
+
     sys.stderr.write(f"[qwebview] start url={authorize_url} storage={storage_path or DEFAULT_STORAGE}\n")
     app = QApplication(sys.argv)
     profile = QWebEngineProfile("aws-rds-tray")
