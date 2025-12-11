@@ -25,6 +25,7 @@ def test_start_uses_start_new_session_and_calls_stop(monkeypatch):
     )
     # stop should be invoked
     monkeypatch.setattr(pf, "stop", mock.Mock())
+    monkeypatch.setattr(ssm, "_cleanup_lingering_sessions", mock.Mock())
     # port not in use
     monkeypatch.setattr(ssm, "_is_port_in_use", mock.Mock(return_value=False))
     popen_mock = mock.Mock(return_value=make_proc(rc=None, pid=999))
@@ -33,6 +34,7 @@ def test_start_uses_start_new_session_and_calls_stop(monkeypatch):
     ok = pf.start()
 
     pf.stop.assert_called_once()
+    ssm._cleanup_lingering_sessions.assert_called_once()
     popen_mock.assert_called_once()
     _, kwargs = popen_mock.call_args
     assert kwargs.get("start_new_session") is True
@@ -50,15 +52,20 @@ def test_start_port_in_use_abort(monkeypatch):
     )
     monkeypatch.setattr(pf, "stop", mock.Mock())
     monkeypatch.setattr(ssm, "_is_port_in_use", mock.Mock(return_value=True))
+    log_occ = mock.Mock()
+    monkeypatch.setattr(ssm, "_log_port_occupant", log_occ)
+    monkeypatch.setattr(ssm, "_cleanup_lingering_sessions", mock.Mock())
     monkeypatch.setattr(ssm, "notify", mock.Mock())
 
     ok = pf.start()
 
     assert ok is False
+    assert log_occ.call_count >= 1
     ssm.notify.assert_called_once()
 
 
 def test_stop_killpg_on_running(monkeypatch):
+    monkeypatch.setattr("aws_rds_tray.ssm._is_port_in_use", lambda port: False)
     pf = ssm.SsmPortForward(
         instance_id="i-123",
         profile="p",
