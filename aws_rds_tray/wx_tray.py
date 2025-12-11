@@ -1,4 +1,4 @@
-from typing import Callable, Optional, Dict, Any, Tuple
+from typing import Callable, Optional, Dict, Any, Tuple, List
 import os
 import threading
 import json
@@ -31,6 +31,8 @@ from .ssm import SsmPortForward, _cleanup_lingering_sessions
 WEBVIEW_STORAGE_DIR = os.path.expanduser("~/.cache/aws-rds-tray/webview")
 QT_WEBVIEW_STORAGE_DIR = os.path.expanduser("~/.cache/aws-rds-tray/qt-webview")
 MINI_PROMPT_SIZE = (260, 90)
+# Qt WebView サブプロセス管理用
+_qt_webview_procs: List[subprocess.Popen] = []
 
 try:
     import pty
@@ -247,6 +249,11 @@ class WxTrayApp:
             _cleanup_lingering_sessions("shutdown")
         except Exception as e:
             log_message(f"[ssm] cleanup during shutdown failed: {e}")
+        # Qt WebView サブプロセスを強制終了しておく
+        try:
+            cleanup_qt_webview_procs(force=True)
+        except Exception as e:
+            log_message(f"[qt-webview] cleanup during shutdown failed: {e}")
         try:
             self._app.ExitMainLoop()
         except Exception:
@@ -602,10 +609,39 @@ webview.start()
         return False
 
 
+def cleanup_qt_webview_procs(force: bool = False, timeout: float = 3.0):
+    """
+    Qt WebView サブプロセスを掃除する。
+    force=True なら terminate→kill まで行う。force=False は終了済みのものだけを除去。
+    """
+    global _qt_webview_procs
+    next_procs: List[subprocess.Popen] = []
+    for p in _qt_webview_procs:
+        rc = p.poll()
+        if rc is None:
+            if not force:
+                next_procs.append(p)
+                continue
+            try:
+                log_message(f"[qt-webview] cleanup terminate pid={p.pid}")
+                p.terminate()
+                p.wait(timeout=timeout)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    log_message(f"[qt-webview] cleanup kill pid={p.pid}")
+                    p.kill()
+            rc = p.poll()
+            log_message(f"[qt-webview] cleanup done pid={p.pid} rc={rc}")
+        else:
+            log_message(f"[qt-webview] already exited pid={getattr(p,'pid',None)} rc={rc}")
+    _qt_webview_procs = next_procs
+
+
 def open_qt_webview_authorize(url: str, storage_dir: Optional[str] = None) -> bool:
     """
     PySide6 + QtWebEngine をサブプロセスで起動して認可URLを開く。
     """
+    cleanup_qt_webview_procs(force=False)
     storage_dir = storage_dir or QT_WEBVIEW_STORAGE_DIR
     try:
         os.makedirs(storage_dir, exist_ok=True)
@@ -637,6 +673,7 @@ def open_qt_webview_authorize(url: str, storage_dir: Optional[str] = None) -> bo
             f"LIBVA_DRIVER_NAME={env.get('LIBVA_DRIVER_NAME')}, "
             f"LIBGL_ALWAYS_SOFTWARE={env.get('LIBGL_ALWAYS_SOFTWARE')}}}"
         )
+        _qt_webview_procs.append(proc)
 
         def _wait_and_log(p: subprocess.Popen):
             try:
@@ -652,7 +689,11 @@ def open_qt_webview_authorize(url: str, storage_dir: Optional[str] = None) -> bo
         time.sleep(0.5)
         rc = proc.poll()
         if rc not in (None, 0):
+            with contextlib.suppress(ValueError):
+                _qt_webview_procs.remove(proc)
             return False
+        # 終了したプロセスがあれば掃除
+        cleanup_qt_webview_procs(force=False)
         return True
     except Exception as e:
         log_message(f"[qt-webview] failed to start: {e}")
