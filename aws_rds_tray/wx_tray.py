@@ -789,6 +789,10 @@ def start_sso_login_webview(url: str) -> bool:
         )
 
     if open_qt_webview_authorize(url, storage_dir=QT_WEBVIEW_STORAGE_DIR, on_fail=_fallback):
+        try:
+            notify("SSO ログイン", "認証画面を開きました。タスクバーから表示できます。")
+        except Exception:
+            pass
         return True
     _fallback()
     return False
