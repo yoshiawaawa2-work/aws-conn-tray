@@ -2,8 +2,6 @@ import datetime
 import subprocess
 from typing import Callable, Optional
 
-import gi
-
 from .paths import LOG_DIR, LOG_PATH
 
 # wx が使える場合は wx 側の通知を優先（GLib ループ不要でクロスプラットフォーム）
@@ -14,16 +12,6 @@ try:
     WX_AVAILABLE = True
 except Exception:
     WX_AVAILABLE = False
-
-# GTK Notify は従来どおりフォールバックとして使用
-try:
-    gi.require_version("Notify", "0.7")
-    from gi.repository import Notify  # noqa: E402
-
-    Notify.init("aws-rds-tray")
-    NOTIFY_AVAILABLE = True
-except Exception:
-    NOTIFY_AVAILABLE = False
 
 
 def log_message(message: str) -> None:
@@ -69,23 +57,14 @@ def notify(title: str, message: str, on_click: Optional[Callable[[], None]] = No
             except Exception:
                 pass
 
-        if NOTIFY_AVAILABLE:
-            n = Notify.Notification.new(title, message, None)
-            if on_click:
-                caps = set(Notify.get_server_caps() or [])
-                log_message(f"notify: server caps={caps}")
-                if "actions" in caps:
-                    n.add_action("default", "open", lambda _n, _a: on_click())
-                else:
-                    log_message("notify: actions not supported; on_clickは実行されませんでした")
-            n.show()
-            return
-
-        # フォールバックで notify-send
-        subprocess.run(
-            ["notify-send", title, message, "--expire-time=8000"],
-            check=False,
-        )
+        # フォールバックで notify-send（GUIが無い場合は無視）
+        try:
+            subprocess.run(
+                ["notify-send", title, message, "--expire-time=8000"],
+                check=False,
+            )
+        except FileNotFoundError:
+            pass
     except FileNotFoundError:
         pass
     except Exception:

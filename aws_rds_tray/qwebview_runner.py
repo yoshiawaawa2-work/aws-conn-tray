@@ -82,9 +82,8 @@ def run_webview(authorize_url: str, storage_path: Optional[str] = None) -> int:
     view.resize(900, 700)
     view.load(QUrl(authorize_url))
     try:
-        # フォーカスを奪わず背面に置く（タスクバーに出すために Tool は使わない）
+        # フォーカスは奪わないが、タスクバーから前面に出せるよう背面固定はしない
         view.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        view.setWindowFlag(Qt.WindowStaysOnBottomHint, True)
     except Exception:
         pass
 
