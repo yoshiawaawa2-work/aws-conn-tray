@@ -32,8 +32,10 @@ def log_message(message: str) -> None:
 
         os.makedirs(LOG_DIR, exist_ok=True)
         timestamp = datetime.datetime.now().isoformat()
+        lines = str(message).splitlines() or [""]
         with open(LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(f"{timestamp} {message}\n")
+            for line in lines:
+                f.write(f"{timestamp} {line}\n")
     except Exception:
         pass
 
