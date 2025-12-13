@@ -82,7 +82,7 @@ def run_webview(authorize_url: str, storage_path: Optional[str] = None) -> int:
     view.resize(900, 700)
     view.load(QUrl(authorize_url))
     try:
-        # フォーカスは奪わないが、タスクバーから前面に出せるよう背面固定はしない
+        # フォーカスを奪わず、最小化状態でタスクバーに格納する
         view.setAttribute(Qt.WA_ShowWithoutActivating, True)
     except Exception:
         pass
@@ -107,8 +107,7 @@ def run_webview(authorize_url: str, storage_path: Optional[str] = None) -> int:
     # URL変化でコールバック検知
     view.urlChanged.connect(handle_url)
     try:
-        # 最小化せずに表示（非アクティブ）
-        view.show()
+        view.showMinimized()
     except Exception:
         view.show()
     rc = app.exec()
