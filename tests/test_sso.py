@@ -82,8 +82,32 @@ def test_start_sso_login_browser(monkeypatch):
             called["cmd"] = cmd
 
     monkeypatch.setattr(sso.subprocess, "Popen", DummyPopen)
+    monkeypatch.setattr(sso, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(sso, "log_message", lambda *a, **k: None)
 
     ok = sso.start_sso_login_browser("profA", "regionB")
     assert ok is True
     assert called["cmd"][0:4] == ["aws", "sso", "login", "--profile"]
     assert "profA" in called["cmd"]
+
+
+def test_start_sso_login_browser_handles_missing_aws(monkeypatch):
+    notified = {}
+
+    def fake_notify(title, message, on_click=None):
+        notified["title"] = title
+        notified["message"] = message
+
+    monkeypatch.setattr(sso, "notify", fake_notify)
+    monkeypatch.setattr(sso, "log_message", lambda *a, **k: None)
+
+    def fake_popen(cmd):
+        raise FileNotFoundError()
+
+    monkeypatch.setattr(sso.subprocess, "Popen", fake_popen)
+
+    ok = sso.start_sso_login_browser("p", "r")
+
+    assert ok is False
+    assert notified.get("title") == "aws コマンドが見つかりません"
+    assert "AWS CLI" in notified.get("message", "")

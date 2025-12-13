@@ -67,12 +67,11 @@ mv aws-rds-tray ~/aws-rds-tray
 
 ### 2. 設定ファイルを配置
 
-`config.example.json` を `~/.config/aws-rds-tray/config.json` にコピーして編集します。
+`config/config.example.json` を同階層の `config/config.json` にコピーして編集します（アプリはリポジトリ内の `config/config.json` を参照します）。
 
 ```bash
-mkdir -p ~/.config/aws-rds-tray
-cp ~/aws-rds-tray/config.example.json ~/.config/aws-rds-tray/config.json
-nano ~/.config/aws-rds-tray/config.json
+cp ~/aws-rds-tray/config/config.example.json ~/aws-rds-tray/config/config.json
+nano ~/aws-rds-tray/config/config.json
 ```
 
 編集ポイント:

@@ -1,3 +1,4 @@
+import aws_rds_tray.ssm as ssm
 from aws_rds_tray.ssm import SsmPortForward
 
 
@@ -30,3 +31,27 @@ def test_ssm_is_alive(monkeypatch):
     assert ssm.is_alive()
     ssm.proc = P(0)
     assert not ssm.is_alive()
+
+
+def test_cleanup_lingering_sessions_kills_found_pids(monkeypatch):
+    calls = []
+
+    class DummyResult:
+        returncode = 0
+        stdout = "123\n456\n"
+        stderr = ""
+
+    monkeypatch.setattr("aws_rds_tray.ssm.subprocess.run", lambda *a, **k: DummyResult())
+    monkeypatch.setattr("aws_rds_tray.ssm.log_message", lambda *a, **k: None)
+    monkeypatch.setattr("aws_rds_tray.ssm.time.sleep", lambda *_: None)
+
+    def fake_kill(pid, sig):
+        calls.append((pid, sig))
+
+    monkeypatch.setattr("aws_rds_tray.ssm.os.kill", fake_kill)
+
+    ssm_module = __import__("aws_rds_tray.ssm", fromlist=["_cleanup_lingering_sessions"])
+    ssm_module._cleanup_lingering_sessions("test")
+
+    assert (123, ssm.signal.SIGTERM) in calls
+    assert (456, ssm.signal.SIGTERM) in calls
