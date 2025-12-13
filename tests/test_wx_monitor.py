@@ -1,4 +1,5 @@
 import importlib.util
+import time
 
 import pytest
 
@@ -89,6 +90,42 @@ def test_start_sso_login_webview_fallback(monkeypatch):
     assert ok is False
     assert "notify" in called
     assert "WebView" in called["notify"][1]
+
+
+def test_qt_webview_crash_triggers_browser_fallback(monkeypatch):
+    # Qt WebView プロセスがクラッシュ(rc=-11など)したときにブラウザフォールバックが呼ばれるか
+    opened = []
+    notified = {}
+
+    class DummyProc:
+        def __init__(self):
+            self._rc = None
+            self.returncode = None
+        def poll(self):
+            return self._rc
+        def communicate(self, timeout=None):
+            time.sleep(0.6)  # allow main thread to pass early-exit check
+            self._rc = -11
+            self.returncode = -11
+            return ("", "segfault")
+
+    def fake_popen(args, stdout=None, stderr=None, text=None, env=None):
+        return DummyProc()
+
+    monkeypatch.setattr(wx_tray.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(wx_tray, "log_message", lambda *a, **k: None)
+    monkeypatch.setattr(wx_tray, "cleanup_qt_webview_procs", lambda force=False: None)
+    monkeypatch.setattr(wx_tray, "notify", lambda title, message, on_click=None: notified.setdefault("msg", message))
+    monkeypatch.setattr(wx_tray.webbrowser, "open", lambda url: opened.append(url))
+
+    ok = wx_tray.open_qt_webview_authorize("https://example.com/auth", storage_dir="/tmp/webview")
+
+    # open_qt_webview_authorize returns True when process starts; fallback runs in thread
+    assert ok is True
+    # スレッドの communicate が動くまで少し待つ
+    time.sleep(0.8)
+    assert opened and "https://example.com/auth" in opened[0]
+    assert "ブラウザで開きます" in notified.get("msg", "")
 
 
 def test_on_sso_login_uses_webview(monkeypatch):
@@ -183,10 +220,17 @@ def test_open_pywebview_authorize(monkeypatch):
     assert "/tmp/test-webview" in cmd
     env = created["env"]
     assert env is not None
-    # デフォルトで GPU/VA-API を無効化しソフトウェアレンダにするフラグが渡される
-    assert env.get("QTWEBENGINE_CHROMIUM_FLAGS") == "--disable-gpu --disable-features=VaapiVideoDecoder"
+    # デフォルトで GPU/VA-API/Sandbox を無効化し、X11 + ソフトウェアレンダを強制する
+    flags = env.get("QTWEBENGINE_CHROMIUM_FLAGS")
+    assert "--disable-gpu" in flags
+    assert "--disable-software-rasterizer" in flags
+    assert "--single-process" in flags
     assert env.get("LIBVA_DRIVER_NAME") == "mesa"
     assert env.get("LIBGL_ALWAYS_SOFTWARE") == "1"
+    assert env.get("QTWEBENGINE_DISABLE_SANDBOX") == "1"
+    assert env.get("QT_QUICK_BACKEND") == "software"
+    assert env.get("QT_QPA_PLATFORM") == "xcb"
+    assert env.get("QT_OPENGL") == "software"
 
 
 def _bare_app():
