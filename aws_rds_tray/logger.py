@@ -44,53 +44,51 @@ def notify(title: str, message: str, on_click: Optional[Callable[[], None]] = No
     try:
         # wx が利用でき、かつ wx.App が存在するなら wx の NotificationMessage を優先
         if WX_AVAILABLE and wx.GetApp() is not None:
-            parent = wx.GetApp().GetTopWindow()
-            msg = wx.adv.NotificationMessage(title, message, parent=parent)
-            if on_click:
-                # 通知全体クリックで on_click を呼ぶ（アクションボタンは無し）
-                def handler(_evt):
-                    try:
-                        on_click()
-                    except Exception:
-                        pass
-                    try:
-                        msg.Unbind(wx.adv.EVT_NOTIFICATION_MESSAGE_CLICKED, handler)
-                    except Exception:
-                        pass
-                msg.Bind(wx.adv.EVT_NOTIFICATION_MESSAGE_CLICKED, handler)
-            msg.Show()
-        elif NOTIFY_AVAILABLE:
+            def _show():
+                parent = wx.GetApp().GetTopWindow()
+                msg = wx.adv.NotificationMessage(title, message, parent=parent)
+                if on_click:
+                    def handler(_evt):
+                        try:
+                            on_click()
+                        except Exception:
+                            pass
+                        try:
+                            msg.Unbind(wx.adv.EVT_NOTIFICATION_MESSAGE_CLICKED, handler)
+                        except Exception:
+                            pass
+                    msg.Bind(wx.adv.EVT_NOTIFICATION_MESSAGE_CLICKED, handler)
+                msg.Show()
+
+            try:
+                if hasattr(wx, "IsMainThread") and not wx.IsMainThread():
+                    wx.CallAfter(_show)
+                else:
+                    _show()
+                return
+            except Exception:
+                pass
+
+        if NOTIFY_AVAILABLE:
             n = Notify.Notification.new(title, message, None)
             if on_click:
-                # 通知サーバがアクションをサポートするか確認（XFCE などは非対応の場合あり）
                 caps = set(Notify.get_server_caps() or [])
                 log_message(f"notify: server caps={caps}")
                 if "actions" in caps:
                     n.add_action("default", "open", lambda _n, _a: on_click())
                 else:
-                    # アクション非対応の場合は案内だけ出す
                     log_message("notify: actions not supported; on_clickは実行されませんでした")
-                    # フォローアップ通知でメニューからの操作を促す
-                    try:
-                        n2 = Notify.Notification.new(
-                            "通知アクションがサポートされていません",
-                            "メニューの「SSO ログイン」からログインしてください。",
-                            None,
-                        )
-                        n2.show()
-                    except Exception:
-                        pass
             n.show()
-        else:
-            raise RuntimeError("notify-unavailable")
-    except Exception:
+            return
+
         # フォールバックで notify-send
-        try:
-            subprocess.run(
-                ["notify-send", title, message, "--expire-time=8000"],
-                check=False,
-            )
-        except FileNotFoundError:
-            pass
+        subprocess.run(
+            ["notify-send", title, message, "--expire-time=8000"],
+            check=False,
+        )
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
     finally:
         log_message(f"{title}: {message}")
