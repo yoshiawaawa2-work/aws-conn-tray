@@ -40,21 +40,29 @@ def run_webview(authorize_url: str, storage_path: Optional[str] = None) -> int:
         return 1
 
     # GPU/VA-API/GL 周りでクラッシュする環境があるため、強めにソフトウェア描画を強制
+    # - xcb を強制 (Wayland/VirtualBox でのクラッシュ回避)
+    # - single-process で共有メモリを避ける
+    # - GPU/GL/Sandbox をオフにする
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
         "--disable-gpu --disable-software-rasterizer "
-        "--disable-features=VaapiVideoDecoder --disable-dev-shm-usage --no-sandbox"
+        "--disable-features=VaapiVideoDecoder --disable-dev-shm-usage --no-sandbox "
+        "--single-process --disable-gpu-compositing --disable-webgl"
     )
     os.environ["LIBVA_DRIVER_NAME"] = "mesa"
     os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
     os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
     os.environ["QT_QUICK_BACKEND"] = "software"
+    os.environ["QT_QPA_PLATFORM"] = "xcb"
+    os.environ["QT_OPENGL"] = "software"
     sys.stderr.write(
         "[qwebview] env "
         f"QTWEBENGINE_CHROMIUM_FLAGS={os.environ.get('QTWEBENGINE_CHROMIUM_FLAGS')} "
         f"LIBVA_DRIVER_NAME={os.environ.get('LIBVA_DRIVER_NAME')} "
         f"LIBGL_ALWAYS_SOFTWARE={os.environ.get('LIBGL_ALWAYS_SOFTWARE')} "
         f"QTWEBENGINE_DISABLE_SANDBOX={os.environ.get('QTWEBENGINE_DISABLE_SANDBOX')} "
-        f"QT_QUICK_BACKEND={os.environ.get('QT_QUICK_BACKEND')}\n"
+        f"QT_QUICK_BACKEND={os.environ.get('QT_QUICK_BACKEND')} "
+        f"QT_QPA_PLATFORM={os.environ.get('QT_QPA_PLATFORM')} "
+        f"QT_OPENGL={os.environ.get('QT_OPENGL')}\n"
     )
 
     sys.stderr.write(f"[qwebview] start url={authorize_url} storage={storage_path or DEFAULT_STORAGE}\n")

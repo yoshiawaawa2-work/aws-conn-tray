@@ -656,12 +656,17 @@ def open_qt_webview_authorize(url: str, storage_dir: Optional[str] = None) -> bo
         storage_dir,
     ]
     env = os.environ.copy()
-    env.setdefault(
-        "QTWEBENGINE_CHROMIUM_FLAGS",
-        "--disable-gpu --disable-features=VaapiVideoDecoder",
+    env["QTWEBENGINE_CHROMIUM_FLAGS"] = (
+        "--disable-gpu --disable-software-rasterizer "
+        "--disable-features=VaapiVideoDecoder --disable-dev-shm-usage --no-sandbox "
+        "--single-process --disable-gpu-compositing --disable-webgl"
     )
-    env.setdefault("LIBVA_DRIVER_NAME", "mesa")
-    env.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+    env["LIBVA_DRIVER_NAME"] = "mesa"
+    env["LIBGL_ALWAYS_SOFTWARE"] = "1"
+    env["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
+    env["QT_QUICK_BACKEND"] = "software"
+    env["QT_QPA_PLATFORM"] = "xcb"
+    env["QT_OPENGL"] = "software"
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env
@@ -675,15 +680,25 @@ def open_qt_webview_authorize(url: str, storage_dir: Optional[str] = None) -> bo
         )
         _qt_webview_procs.append(proc)
 
-        def _wait_and_log(p: subprocess.Popen):
+        def _wait_and_log(p: subprocess.Popen, auth_url: str):
             try:
                 out, err = p.communicate()
                 rc = p.returncode
                 log_message(f"[qt-webview] exit rc={rc} stdout={out!r} stderr={err!r}")
+                if rc not in (0, None):
+                    notify(
+                        "SSO ログイン",
+                        "組み込み WebView がクラッシュしたため、ブラウザで開きます。",
+                        on_click=lambda: webbrowser.open(auth_url),
+                    )
+                    try:
+                        webbrowser.open(auth_url)
+                    except Exception:
+                        pass
             except Exception as e:
                 log_message(f"[qt-webview] wait error: {e}")
 
-        threading.Thread(target=_wait_and_log, args=(proc,), daemon=True).start()
+        threading.Thread(target=_wait_and_log, args=(proc, url), daemon=True).start()
 
         # すぐに落ちていないか簡易チェック（依存不足など）
         time.sleep(0.5)
