@@ -13,11 +13,18 @@ def main():
     ensure_supported_os()
     config = load_config()
 
-    ok, issues = check_prerequisites(config.profile, config.region, config.instance_id, config.remote_host)
+    ok, issues = check_prerequisites(
+        config.profile,
+        config.region,
+        config.instance_id,
+        config.remote_host,
+        require_ssm=False,  # トークンが無い状態でも起動し、アプリ側で再ログインを促す
+    )
     if not ok:
         for issue in issues:
             notify("前提条件エラー", issue)
-        sys.exit(1)
+        # SSM 到達性などはアプリ起動後に再ログインすれば解消するため、致命ではない
+        # ここではログだけ残して継続する
 
     try:
         from aws_rds_tray.wx_tray import run_wx_app

@@ -39,7 +39,13 @@ def check_profile_config(profile: str) -> List[str]:
     return issues
 
 
-def check_prerequisites(profile: str, region: str, instance_id: str, remote_host: str) -> Tuple[bool, List[str]]:
+def check_prerequisites(
+    profile: str,
+    region: str,
+    instance_id: str,
+    remote_host: str,
+    require_ssm: bool = True,
+) -> Tuple[bool, List[str]]:
     issues: List[str] = []
 
     aws_path = shutil.which("aws")
@@ -57,7 +63,7 @@ def check_prerequisites(profile: str, region: str, instance_id: str, remote_host
 
     issues.extend(check_profile_config(profile))
 
-    if aws_path:
+    if aws_path and require_ssm:
         cmd = [
             aws_path,
             "ssm",
