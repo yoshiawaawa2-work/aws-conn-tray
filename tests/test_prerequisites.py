@@ -66,3 +66,26 @@ def test_check_profile_config_missing_session(monkeypatch, tmp_path):
 
     issues = prerequisites.check_profile_config("prof")
     assert any("存在しません" in i for i in issues)
+
+
+def test_check_prerequisites_flags_missing_remote_host(monkeypatch):
+    # aws/session-manager-plugin はある前提
+    monkeypatch.setattr(prerequisites, "shutil", type("S", (), {"which": lambda _: "/usr/bin/aws"}))
+    monkeypatch.setattr(prerequisites, "_run_command", lambda *a, **k: (0, "aws-cli/2.0.0", ""))
+    monkeypatch.setattr(prerequisites, "check_profile_config", lambda profile: [])
+
+    ok, issues = prerequisites.check_prerequisites("prof", "reg", "i-123", "")
+
+    assert ok is False
+    assert any("remote_host" in i for i in issues)
+
+
+def test_check_prerequisites_warns_when_awscli_not_v2(monkeypatch):
+    monkeypatch.setattr(prerequisites, "shutil", type("S", (), {"which": lambda _: "/usr/bin/aws"}))
+    monkeypatch.setattr(prerequisites, "_run_command", lambda *a, **k: (0, "aws-cli/1.27.0", ""))
+    monkeypatch.setattr(prerequisites, "check_profile_config", lambda profile: [])
+
+    ok, issues = prerequisites.check_prerequisites("prof", "reg", "i-123", "db.example.com")
+
+    assert ok is False
+    assert any("AWS CLI v2 ではない可能性があります" in i for i in issues)
