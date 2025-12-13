@@ -1,11 +1,11 @@
 
 # aws-rds-tray
 
-AWS SSO トークンと SSM ポートフォワード（RDS 用）を監視する Ubuntu 用トレイ常駐アプリ一式です。
+AWS SSO トークンと SSM ポートフォワード（RDS 用）を監視する Ubuntu 用トレイ常駐アプリ一式です。GUI は wxPython ベースのみです。
 
 ## 機能概要
 
-- Ubuntu のパネル右上（タスクトレイ）に常駐アイコンを表示
+- Ubuntu のパネル右上（タスクトレイ）に常駐アイコンを表示（wxPython）
 - `~/.aws/sso/cache/*.json` から SSO トークンの期限を監視
 - トークン期限が 5 分前 / 1 分前 / 期限切れ のタイミングで通知
 - SSO ログインページをブラウザで開くメニュー
@@ -19,7 +19,7 @@ AWS SSO トークンと SSM ポートフォワード（RDS 用）を監視する
 ## ディレクトリ構成
 
 - `tray_app.py`  
-  トレイ常駐アプリ本体（Python3）。
+  トレイ常駐アプリ本体（Python3）。wxPython 版のみ。
 
 - `config.example.json`  
   設定ファイルのサンプル。`~/.config/aws-rds-tray/config.json` にコピーして使用します。
@@ -43,17 +43,8 @@ AWS SSO トークンと SSM ポートフォワード（RDS 用）を監視する
 - AWS SSO (IAM Identity Center) 設定済み (`aws configure sso` 済)
 - 踏み台 EC2 が SSM で接続可能であること
 - RDS (PostgreSQL) が踏み台から 5432/TCP で到達可能であること
-- Python3 および以下のパッケージ：
-  - `python3-gi`
-  - `gir1.2-ayatanaappindicator3-0.1` または `gir1.2-appindicator3-0.1`
-  - `libnotify-bin`
-
-インストール例（Ubuntu）:
-
-```bash
-sudo apt update
-sudo apt install -y python3-gi gir1.2-ayatanaappindicator3-0.1 libnotify-bin
-```
+- Python3
+- wxPython, PySide6（`requirements.txt` を参照）
 
 ## セットアップ手順
 

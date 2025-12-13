@@ -6,8 +6,6 @@ import subprocess
 import time
 from typing import Optional, Tuple
 
-import gi
-
 from .logger import notify, log_message
 from .paths import SSO_CACHE_PATTERN, LOG_PATH
 
@@ -18,19 +16,8 @@ try:
 except ImportError:
     PTY_AVAILABLE = False
 
-try:
-    gi.require_version("WebKit2", "4.0")
-    from gi.repository import WebKit2
-    WEBKIT_AVAILABLE = True
-except (ValueError, ImportError):
-    WEBKIT_AVAILABLE = False
-
-gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib  # noqa: E402
-
 LAST_DEVICE_URL: Optional[str] = None
 LAST_DEVICE_CODE: Optional[str] = None
-LAST_WEBVIEW_WINDOW = None
 
 
 def token_cache_exists(cache_pattern: str = SSO_CACHE_PATTERN) -> bool:
@@ -105,46 +92,6 @@ def is_sso_session_valid(profile: str, region: str) -> bool:
         return result.returncode == 0
     except Exception:
         return False
-
-
-def open_webview_minimized(url: str) -> bool:
-    if not WEBKIT_AVAILABLE:
-        return False
-
-    def _create():
-        window = Gtk.Window()
-        window.set_title("AWS SSO ログイン")
-        window.set_default_size(400, 300)
-        view = WebKit2.WebView()
-        view.load_uri(url)
-        window.add(view)
-        window.show_all()
-        try:
-            window.set_keep_above(True)
-        except Exception:
-            pass
-        try:
-            window.present_with_time(Gtk.get_current_event_time())
-            window.iconify()
-        except Exception:
-            pass
-        global LAST_WEBVIEW_WINDOW
-        LAST_WEBVIEW_WINDOW = window
-        return False
-
-    GLib.idle_add(_create, priority=GLib.PRIORITY_DEFAULT)
-    log_message(f"Open WebView minimized: {url}")
-    return True
-
-
-def bring_webview_to_front():
-    global LAST_WEBVIEW_WINDOW
-    try:
-        if LAST_WEBVIEW_WINDOW:
-            LAST_WEBVIEW_WINDOW.present_with_time(Gtk.get_current_event_time())
-            LAST_WEBVIEW_WINDOW.set_keep_above(True)
-    except Exception:
-        pass
 
 
 def _parse_device_flow(text: str) -> Tuple[Optional[str], Optional[str]]:
@@ -322,18 +269,15 @@ def run_sso_login(profile: str, region: str, sso_start_url: str, timeout: int) -
 
 
 def _open_auth_ui(url: str, code: Optional[str]) -> None:
-    opened = open_webview_minimized(url)
-    if not opened:
-        try:
-            subprocess.run(["gio", "open", url], check=False)
-        except Exception:
-            pass
+    try:
+        subprocess.run(["gio", "open", url], check=False)
+    except Exception:
+        pass
     notify(
         "SSO トークン更新",
         f"SSO トークンを更新するためログイン画面を開きました。コード: {code or '---'}"
     )
-    log_message(f"Opened auth URL: {url}")
-    bring_webview_to_front()
+    log_message(f"Opened auth URL (browser): {url}")
 
 
 def start_sso_login_browser(profile: str, region: str) -> bool:

@@ -1,4 +1,4 @@
-from aws_rds_tray.tray import validate_config_input
+from aws_rds_tray.wx_tray import validate_settings_input
 
 
 def test_validate_config_success():
@@ -21,7 +21,7 @@ def test_validate_config_success():
         "sso_auto_refresh_margin_seconds": "300",
         "tunnel_check_interval_seconds": "10",
     }
-    ok, errors, parsed = validate_config_input(data, defaults)
+    ok, errors, parsed = validate_settings_input(data, defaults)
     assert ok is True
     assert errors == []
     assert parsed["local_port"] == 15432
@@ -42,7 +42,7 @@ def test_validate_config_errors():
         "sso_auto_refresh_margin_seconds": "-1",
         "tunnel_check_interval_seconds": "-2",
     }
-    ok, errors, _ = validate_config_input(data, defaults)
+    ok, errors, _ = validate_settings_input(data, defaults)
     assert ok is False
     # 必須項目5つ + 数値項目5つでエラーがあること
     assert len(errors) == 10

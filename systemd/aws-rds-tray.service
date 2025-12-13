@@ -8,7 +8,6 @@ After=graphical-session.target
 ExecStart=/usr/bin/python3 /home/YOUR_USERNAME/aws-rds-tray/tray_app.py
 Restart=always
 RestartSec=5
-Environment=GTK_USE_PORTAL=0
 
 [Install]
 WantedBy=default.target
