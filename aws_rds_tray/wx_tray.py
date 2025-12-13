@@ -334,7 +334,7 @@ class WxTrayApp:
 
     def _start_sso_refresh(self):
         """
-        マージン内で自動リフレッシュを試みる。スレッドで実行。
+        マージン内で自動リフレッシュを試みる。スレッドで実行し、URLが取れたら自動でWebViewを開く。
         """
 
         def worker():
@@ -346,7 +346,9 @@ class WxTrayApp:
                     timeout=self.config.sso_login_timeout_seconds,
                 )
                 if url and "authorize" in url.lower():
-                    self._show_sso_prompt(url, "SSO トークンを更新するためログイン画面を開きます。")
+                    log_message(f"[wx-refresh] authorize url fetched: {url}")
+                    # 自動で WebView を開き、失敗時は MiniPrompt/通知がフォールバック
+                    start_sso_login_webview(url)
                 else:
                     msg = "認可URLの取得に失敗しました。以下のボタンで再試行してください。"
                     self._show_sso_prompt(self.config.sso_start_url, msg, "再試行")
