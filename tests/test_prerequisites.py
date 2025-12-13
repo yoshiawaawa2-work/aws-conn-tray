@@ -89,3 +89,19 @@ def test_check_prerequisites_warns_when_awscli_not_v2(monkeypatch):
 
     assert ok is False
     assert any("AWS CLI v2 ではない可能性があります" in i for i in issues)
+
+
+def test_check_prerequisites_skip_ssm(monkeypatch):
+    monkeypatch.setattr(prerequisites, "shutil", type("S", (), {"which": lambda _: "/usr/bin/aws"}))
+    # SSM コマンドは実行されない前提で必ず失敗を返す
+    def fake_run(cmd, timeout=5):
+        if "describe-instance-information" in cmd:
+            return (1, "", "token expired")
+        return (0, "aws-cli/2.0.0", "")
+    monkeypatch.setattr(prerequisites, "_run_command", fake_run)
+    monkeypatch.setattr(prerequisites, "check_profile_config", lambda profile: [])
+
+    ok, issues = prerequisites.check_prerequisites("prof", "reg", "i-123", "db.example.com", require_ssm=False)
+
+    assert ok is True
+    assert issues == []
