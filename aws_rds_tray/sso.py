@@ -353,22 +353,3 @@ def start_sso_login_browser(profile: str, region: str) -> bool:
         notify("SSO ログインに失敗しました", str(e))
         log_message(f"SSO login (browser) failed: {e}")
     return False
-
-
-def start_sso_login_browser(profile: str, region: str) -> bool:
-    """
-    デフォルトブラウザで SSO ログインを開始する（no-browser を使わずシンプルに呼び出す）。
-    """
-    cmd = ["aws", "sso", "login", "--profile", profile]
-    if region:
-        cmd += ["--region", region]
-    try:
-        subprocess.Popen(cmd)
-        log_message(f"SSO login (browser) started: {' '.join(cmd)}")
-        return True
-    except FileNotFoundError:
-        notify("aws コマンドが見つかりません", "AWS CLI v2 をインストールしてください。")
-    except Exception as e:
-        notify("SSO ログインに失敗しました", str(e))
-        log_message(f"SSO login (browser) failed: {e}")
-    return False
