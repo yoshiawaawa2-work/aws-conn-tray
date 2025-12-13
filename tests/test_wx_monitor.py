@@ -75,27 +75,23 @@ def test_monitor_starts_ssm_when_token_ok(monkeypatch):
 
 
 def test_start_sso_login_webview_fallback(monkeypatch):
-    # open_qt_webview_authorize が False を返した場合にブラウザフォールバックと通知が呼ばれるか
-    called = {}
-    monkeypatch.setattr(wx_tray, "open_qt_webview_authorize", lambda url, storage_dir=None: False)
-
-    def fake_notify(title, message, on_click=None):
-        called["notify"] = (title, message)
-        if on_click:
-            on_click()
-
-    monkeypatch.setattr(wx_tray, "notify", fake_notify)
+    # open_qt_webview_authorize が False を返した場合にミニダイアログ経由のブラウザ誘導になるか
+    called_prompt = {}
+    stub_app = type("App", (), {})()
+    stub_app._tray_app = type("Tray", (), {"_show_browser_prompt": lambda self, url, msg: called_prompt.setdefault("msg", msg)})()
+    monkeypatch.setattr(wx_tray.wx, "GetApp", lambda: stub_app)
+    monkeypatch.setattr(wx_tray, "open_qt_webview_authorize", lambda url, storage_dir=None, on_fail=None: False)
+    monkeypatch.setattr(wx_tray, "notify", lambda *a, **k: called_prompt.setdefault("notify", True))
 
     ok = wx_tray.start_sso_login_webview("https://example.com/auth")
     assert ok is False
-    assert "notify" in called
-    assert "WebView" in called["notify"][1]
+    assert "msg" in called_prompt
+    assert "WebView を開けませんでした" in called_prompt["msg"]
 
 
 def test_qt_webview_crash_triggers_browser_fallback(monkeypatch):
-    # Qt WebView プロセスがクラッシュ(rc=-11など)したときにブラウザフォールバックが呼ばれるか
-    opened = []
-    notified = {}
+    # Qt WebView プロセスがクラッシュ(rc=-11など)したときにブラウザフォールバック誘導が呼ばれるか
+    called_prompt = {}
 
     class DummyProc:
         def __init__(self):
@@ -115,17 +111,16 @@ def test_qt_webview_crash_triggers_browser_fallback(monkeypatch):
     monkeypatch.setattr(wx_tray.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(wx_tray, "log_message", lambda *a, **k: None)
     monkeypatch.setattr(wx_tray, "cleanup_qt_webview_procs", lambda force=False: None)
-    monkeypatch.setattr(wx_tray, "notify", lambda title, message, on_click=None: notified.setdefault("msg", message))
-    monkeypatch.setattr(wx_tray.webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setattr(wx_tray.webbrowser, "open", lambda url: called_prompt.setdefault("opened", url))
+    stub_app = type("App", (), {})()
+    stub_app._tray_app = type("Tray", (), {"_show_browser_prompt": lambda self, url, msg: called_prompt.setdefault("msg", msg)})()
+    monkeypatch.setattr(wx_tray.wx, "GetApp", lambda: stub_app)
 
-    ok = wx_tray.open_qt_webview_authorize("https://example.com/auth", storage_dir="/tmp/webview")
+    ok = wx_tray.open_qt_webview_authorize("https://example.com/auth", storage_dir="/tmp/webview", on_fail=lambda: stub_app._tray_app._show_browser_prompt("https://example.com/auth", "fallback"))
 
-    # open_qt_webview_authorize returns True when process starts; fallback runs in thread
     assert ok is True
-    # スレッドの communicate が動くまで少し待つ
     time.sleep(0.8)
-    assert opened and "https://example.com/auth" in opened[0]
-    assert "ブラウザで開きます" in notified.get("msg", "")
+    assert "msg" in called_prompt
 
 
 def test_on_sso_login_uses_webview(monkeypatch):
@@ -144,9 +139,11 @@ def test_on_sso_login_uses_webview(monkeypatch):
 
     called = {}
     app._launch_webview = lambda url: called.setdefault("url", url)
+    monkeypatch.setattr(wx_tray, "notify", lambda *a, **k: called.setdefault("notified", True))
 
     app.on_sso_login()
     assert called.get("url") == "https://start.example.com"
+    assert called.get("notified") is True
 
 
 def test_parse_authorize_url():
@@ -224,7 +221,7 @@ def test_open_pywebview_authorize(monkeypatch):
     flags = env.get("QTWEBENGINE_CHROMIUM_FLAGS")
     assert "--disable-gpu" in flags
     assert "--disable-software-rasterizer" in flags
-    assert "--single-process" in flags
+    assert "--single-process" not in flags  # single-process は外した
     assert env.get("LIBVA_DRIVER_NAME") == "mesa"
     assert env.get("LIBGL_ALWAYS_SOFTWARE") == "1"
     assert env.get("QTWEBENGINE_DISABLE_SANDBOX") == "1"

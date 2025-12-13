@@ -11,7 +11,7 @@ import sys
 from typing import Optional
 
 try:
-    from PySide6.QtCore import QUrl
+    from PySide6.QtCore import QUrl, Qt
     from PySide6.QtWidgets import QApplication
     from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
     from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -46,7 +46,7 @@ def run_webview(authorize_url: str, storage_path: Optional[str] = None) -> int:
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
         "--disable-gpu --disable-software-rasterizer "
         "--disable-features=VaapiVideoDecoder --disable-dev-shm-usage --no-sandbox "
-        "--single-process --disable-gpu-compositing --disable-webgl"
+        "--disable-gpu-compositing --disable-webgl"
     )
     os.environ["LIBVA_DRIVER_NAME"] = "mesa"
     os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
@@ -81,18 +81,37 @@ def run_webview(authorize_url: str, storage_path: Optional[str] = None) -> int:
     view.setPage(page)
     view.resize(900, 700)
     view.load(QUrl(authorize_url))
+    try:
+        # フォーカスを奪わず背面に置く（タスクバーに出すために Tool は使わない）
+        view.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        view.setWindowFlag(Qt.WindowStaysOnBottomHint, True)
+    except Exception:
+        pass
 
     def handle_url(qurl: QUrl):
         url_str = qurl.toString()
         sys.stderr.write(f"[qwebview] urlChanged {url_str}\n")
         if _is_callback_url(url_str):
             sys.stderr.write("[qwebview] callback detected -> quit\n")
+            try:
+                from aws_rds_tray.logger import notify, log_message
+                notify(
+                    "SSO ログイン完了",
+                    "認証コードを検出したため WebView を閉じます。",
+                )
+                log_message(f"SSO callback detected, closing WebView: {url_str}")
+            except Exception:
+                pass
             view.close()
             app.quit()
 
     # URL変化でコールバック検知
     view.urlChanged.connect(handle_url)
-    view.show()
+    try:
+        # 最小化せずに表示（非アクティブ）
+        view.show()
+    except Exception:
+        view.show()
     rc = app.exec()
     sys.stderr.write(f"[qwebview] app.exec() finished rc={rc}\n")
     return 0

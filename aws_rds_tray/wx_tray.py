@@ -153,6 +153,11 @@ class WxTrayApp:
         if not _has_display():
             raise RuntimeError("DISPLAY が利用できません。GUI 環境で実行してください。")
         self._app = wx.App(clearSigInt=False)
+        # tray_app への参照を app に保持しておき、フォールバック時に利用する
+        try:
+            self._app._tray_app = self
+        except Exception:
+            pass
         # Top-level が無いとすぐ終了する環境があるため、ダミーフレームで維持
         self._app.SetExitOnFrameDelete(False)
         self._frame = wx.Frame(None)
@@ -373,6 +378,7 @@ class WxTrayApp:
 
     def on_sso_login(self):
         # メニューからも認可URL取得→WebView起動を統一
+        notify("SSO ログイン", "認証画面を開きます（フォーカスは奪いません）。")
         self._launch_webview(self.config.sso_start_url)
         self._refreshing = False
         self._notified_invalid = False
@@ -474,6 +480,21 @@ class WxTrayApp:
             except Exception:
                 pass
             self._mini_prompt = None
+
+    def _show_browser_prompt(self, url: str, message: str):
+        """
+        右下ダイアログでブラウザ起動を促す（自動では開かない）。
+        """
+        self._close_mini_prompt()
+
+        def on_click():
+            try:
+                webbrowser.open(url)
+            except Exception as e:
+                log_message(f"[webview-fallback] browser open failed: {e}")
+
+        self._mini_prompt = MiniPrompt(message=message, on_click=on_click, button_label="開く")
+        self._mini_prompt.show_bottom_right()
 
     def _launch_webview(self, fallback_url: str):
         """
@@ -637,7 +658,11 @@ def cleanup_qt_webview_procs(force: bool = False, timeout: float = 3.0):
     _qt_webview_procs = next_procs
 
 
-def open_qt_webview_authorize(url: str, storage_dir: Optional[str] = None) -> bool:
+def open_qt_webview_authorize(
+    url: str,
+    storage_dir: Optional[str] = None,
+    on_fail: Optional[Callable[[], None]] = None,
+) -> bool:
     """
     PySide6 + QtWebEngine をサブプロセスで起動して認可URLを開く。
     """
@@ -659,7 +684,7 @@ def open_qt_webview_authorize(url: str, storage_dir: Optional[str] = None) -> bo
     env["QTWEBENGINE_CHROMIUM_FLAGS"] = (
         "--disable-gpu --disable-software-rasterizer "
         "--disable-features=VaapiVideoDecoder --disable-dev-shm-usage --no-sandbox "
-        "--single-process --disable-gpu-compositing --disable-webgl"
+        "--disable-gpu-compositing --disable-webgl"
     )
     env["LIBVA_DRIVER_NAME"] = "mesa"
     env["LIBGL_ALWAYS_SOFTWARE"] = "1"
@@ -685,16 +710,11 @@ def open_qt_webview_authorize(url: str, storage_dir: Optional[str] = None) -> bo
                 out, err = p.communicate()
                 rc = p.returncode
                 log_message(f"[qt-webview] exit rc={rc} stdout={out!r} stderr={err!r}")
-                if rc not in (0, None):
-                    notify(
-                        "SSO ログイン",
-                        "組み込み WebView がクラッシュしたため、ブラウザで開きます。",
-                        on_click=lambda: webbrowser.open(auth_url),
-                    )
+                if rc not in (0, None) and on_fail:
                     try:
-                        webbrowser.open(auth_url)
-                    except Exception:
-                        pass
+                        on_fail()
+                    except Exception as e:
+                        log_message(f"[qt-webview] on_fail error: {e}")
             except Exception as e:
                 log_message(f"[qt-webview] wait error: {e}")
 
@@ -706,32 +726,69 @@ def open_qt_webview_authorize(url: str, storage_dir: Optional[str] = None) -> bo
         if rc not in (None, 0):
             with contextlib.suppress(ValueError):
                 _qt_webview_procs.remove(proc)
+            if on_fail:
+                try:
+                    on_fail()
+                except Exception as e:
+                    log_message(f"[qt-webview] on_fail error: {e}")
             return False
         # 終了したプロセスがあれば掃除
         cleanup_qt_webview_procs(force=False)
         return True
     except Exception as e:
         log_message(f"[qt-webview] failed to start: {e}")
+        if on_fail:
+            try:
+                on_fail()
+            except Exception as e2:
+                log_message(f"[qt-webview] on_fail error: {e2}")
         return False
 
 
 def start_sso_login_webview(url: str) -> bool:
     """
-    認可URLを Qt WebEngine (PySide6) で開く。失敗時はブラウザフォールバック。
+    認可URLを Qt WebEngine (PySide6) で開く。失敗時はミニダイアログ経由でブラウザフォールバック。
     """
     if not url:
         return False
-    if open_qt_webview_authorize(url, storage_dir=QT_WEBVIEW_STORAGE_DIR):
+    fallback_triggered = {"done": False}
+
+    def _fallback():
+        # 右下ダイアログでブラウザ誘導。wx コンテキストが無い場合は notify にフォールバック。
+        fallback_triggered["done"] = True
+        log_message("[webview-fallback] showing browser prompt")
+        try:
+            app = wx.GetApp()
+            if app and hasattr(app, "_tray_app"):
+                tray_app = getattr(app, "_tray_app")
+            else:
+                tray_app = None
+        except Exception:
+            tray_app = None
+
+        if tray_app and hasattr(tray_app, "_show_browser_prompt"):
+            try:
+                tray_app._show_browser_prompt(
+                    url,
+                    "WebView を開けませんでした。右下の「開く」でブラウザを開いてログインしてください。",
+                )
+                notify(
+                    "SSO ログイン",
+                    "WebView を開けませんでした。右下の「開く」からブラウザを開いてください。",
+                    on_click=lambda: webbrowser.open(url),
+                )
+                return
+            except Exception:
+                pass
+        notify(
+            "SSO ログイン",
+            "WebView を開けませんでした。通知をクリックしてブラウザで開いてください。",
+            on_click=lambda: webbrowser.open(url),
+        )
+
+    if open_qt_webview_authorize(url, storage_dir=QT_WEBVIEW_STORAGE_DIR, on_fail=_fallback):
         return True
-    notify(
-        "SSO ログイン",
-        "WebView を開けませんでした。デフォルトブラウザで開きます。",
-        on_click=lambda: webbrowser.open(url),
-    )
-    try:
-        webbrowser.open(url)
-    except Exception:
-        pass
+    _fallback()
     return False
 
 
