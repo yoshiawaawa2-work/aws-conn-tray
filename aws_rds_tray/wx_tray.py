@@ -832,11 +832,12 @@ def validate_settings_input(data: Dict[str, Any], defaults: Dict[str, Any]):
 
 # ===== エントリポイント =====
 
-def run_wx_app():
+def run_wx_app(config: Optional[Config] = None):
     """
     エントリポイント。
+    config が指定されていなければ内部で load_config する。
     """
-    config = load_config()
+    config = config or load_config()
     app = WxTrayApp()
     app.init_tray(callbacks={}, config=config)
     app.MainLoop()
