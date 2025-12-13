@@ -275,6 +275,40 @@ def test_refresh_webview_fallback(monkeypatch):
             "sso_login_timeout_seconds": 10,
         },
     )()
+    called = {"opened": 0, "prompt": None}
+
+    def fake_thread(target, daemon):
+        class Dummy:
+            def start(self_inner):
+                target()
+        return Dummy()
+
+    monkeypatch.setattr(wx_tray.threading, "Thread", fake_thread)
+    # URL 取得成功 → 自動で WebView を開く
+    monkeypatch.setattr(wx_tray, "_fetch_authorize_url", lambda *a, **k: ("https://auth.example.com/authorize", None))
+    def fake_start(url):
+        called["opened"] += 1
+        return True
+    monkeypatch.setattr(wx_tray, "start_sso_login_webview", fake_start)
+    app._show_sso_prompt = lambda *a, **k: called.setdefault("prompt", True)
+
+    wx_tray.WxTrayApp._start_sso_refresh(app)
+    assert called["opened"] == 1
+    assert called["prompt"] is None  # 成功時はダイアログ不要
+
+
+def test_refresh_webview_fetch_fail(monkeypatch):
+    app = _bare_app()
+    app.config = type(
+        "C",
+        (),
+        {
+            "profile": "p",
+            "region": "r",
+            "sso_start_url": "https://start.example.com",
+            "sso_login_timeout_seconds": 10,
+        },
+    )()
     called = {}
 
     def fake_thread(target, daemon):
@@ -286,9 +320,8 @@ def test_refresh_webview_fallback(monkeypatch):
     monkeypatch.setattr(wx_tray.threading, "Thread", fake_thread)
     monkeypatch.setattr(wx_tray, "_fetch_authorize_url", lambda *a, **k: (None, None))
     monkeypatch.setattr(wx_tray, "start_sso_login_webview", lambda url: False)
-    monkeypatch.setattr(wx_tray, "notify", lambda t, m, on_click=None: called.setdefault("notify", (t, m)))
-    # ミニダイアログは _show_sso_prompt モックで抑制し、呼ばれたことだけ確認
     app._show_sso_prompt = lambda url, msg, btn="開く": called.setdefault("prompt", (url, msg, btn))
+
     wx_tray.WxTrayApp._start_sso_refresh(app)
     assert "prompt" in called  # 認可URL取得失敗で再試行ダイアログが呼ばれる
 
