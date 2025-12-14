@@ -472,7 +472,8 @@ class WxTrayApp:
             except Exception as e:
                 log_message(f"[webview-launch] failed: {e}")
 
-        self._mini_prompt = MiniPrompt(message=message, on_click=on_click, button_label=button_label)
+        wrapped = _wrap_text_for_prompt(message, width=20)
+        self._mini_prompt = MiniPrompt(message=wrapped, on_click=on_click, button_label=button_label)
         self._mini_prompt.show_bottom_right()
 
     def _close_mini_prompt(self):
@@ -495,7 +496,8 @@ class WxTrayApp:
             except Exception as e:
                 log_message(f"[webview-fallback] browser open failed: {e}")
 
-        self._mini_prompt = MiniPrompt(message=message, on_click=on_click, button_label="開く")
+        wrapped = _wrap_text_for_prompt(message, width=20)
+        self._mini_prompt = MiniPrompt(message=wrapped, on_click=on_click, button_label="開く")
         self._mini_prompt.show_bottom_right()
 
     def _launch_webview(self, fallback_url: str):
@@ -899,8 +901,7 @@ class MiniPrompt(wx.Frame):
         panel = wx.Panel(self)
         panel.SetBackgroundColour(wx.Colour(245, 245, 245))
         sizer = wx.BoxSizer(wx.VERTICAL)
-        wrapped = _wrap_text_for_prompt(message, width=20)
-        label = wx.StaticText(panel, label=wrapped, style=wx.ALIGN_LEFT)
+        label = wx.StaticText(panel, label=message, style=wx.ALIGN_LEFT)
         # 読みやすいフォントに調整
         font = label.GetFont()
         font.SetPointSize(max(12, font.GetPointSize() + 3))

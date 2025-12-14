@@ -134,6 +134,35 @@ def test_wrap_text_for_prompt():
     assert any("フォールバック" in line for line in lines)
 
 
+def test_show_prompts_wrap_text(monkeypatch):
+    app = wx_tray.WxTrayApp.__new__(wx_tray.WxTrayApp)
+    app._mini_prompt = None
+    app._webview_running = False
+    called = {}
+
+    # スタブ MiniPrompt で渡されたテキストを記録
+    class DummyPrompt:
+        def __init__(self, message, on_click=None, button_label="開く"):
+            called["message"] = message
+            called["button"] = button_label
+        def show_bottom_right(self):
+            called["shown"] = True
+
+    monkeypatch.setattr(wx_tray, "MiniPrompt", DummyPrompt)
+    monkeypatch.setattr(wx_tray, "_wrap_text_for_prompt", lambda msg, width=20: f"WRAP:{msg}")
+    # _launch_webview をスタブ
+    app._launch_webview = lambda url: called.setdefault("launched", url)
+
+    app._show_sso_prompt("https://auth", "これは長い文言です")
+    assert called.get("message", "").startswith("WRAP:")
+    assert called.get("button") == "開く"
+
+    called.clear()
+    app._show_browser_prompt("https://auth", "ブラウザで開きます")
+    assert called.get("message", "").startswith("WRAP:")
+    assert called.get("button") == "開く"
+
+
 
 
 def test_on_sso_login_uses_webview(monkeypatch):
