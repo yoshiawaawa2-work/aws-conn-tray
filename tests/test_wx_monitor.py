@@ -135,6 +135,7 @@ def test_wrap_text_for_prompt():
 
 
 def test_show_prompts_wrap_text(monkeypatch):
+    from aws_rds_tray import wx_tray as wx_tray_module
     app = wx_tray.WxTrayApp.__new__(wx_tray.WxTrayApp)
     app._mini_prompt = None
     app._webview_running = False
@@ -161,6 +162,13 @@ def test_show_prompts_wrap_text(monkeypatch):
     app._show_browser_prompt("https://auth", "ブラウザで開きます")
     assert called.get("message", "").startswith("WRAP:")
     assert called.get("button") == "開く"
+
+
+def test_mini_prompt_size_constants():
+    from aws_rds_tray.wx_tray import MINI_PROMPT_SIZE
+    # 横幅は 20 文字程度に合わせてコンパクト
+    assert MINI_PROMPT_SIZE[0] <= 340
+    assert MINI_PROMPT_SIZE[1] <= 200
 
 
 

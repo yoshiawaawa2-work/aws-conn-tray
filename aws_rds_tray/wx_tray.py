@@ -30,7 +30,7 @@ from .ssm import SsmPortForward, _cleanup_lingering_sessions
 
 WEBVIEW_STORAGE_DIR = os.path.expanduser("~/.cache/aws-rds-tray/webview")
 QT_WEBVIEW_STORAGE_DIR = os.path.expanduser("~/.cache/aws-rds-tray/qt-webview")
-MINI_PROMPT_SIZE = (260, 90)
+MINI_PROMPT_SIZE = (280, 120)
 # Qt WebView サブプロセス管理用
 _qt_webview_procs: List[subprocess.Popen] = []
 
@@ -904,9 +904,9 @@ class MiniPrompt(wx.Frame):
         # 念のため常に最前面フラグを維持
         self.SetWindowStyleFlag(self.GetWindowStyle() | wx.STAY_ON_TOP)
         self.on_click = on_click
-        # さらに広い最小サイズでテキスト切れを防止
-        self.SetSize((520, 200))
-        self.SetMinSize((520, 200))
+        # 横幅は 20 文字程度に合わせてコンパクトに
+        self.SetSize((340, 180))
+        self.SetMinSize((340, 180))
         panel = wx.Panel(self)
         panel.SetBackgroundColour(wx.Colour(245, 245, 245))
         sizer = wx.BoxSizer(wx.VERTICAL)
@@ -918,7 +918,7 @@ class MiniPrompt(wx.Frame):
         label.SetFont(font)
         label.SetForegroundColour(wx.Colour(0, 0, 0))
         # 長い文言でも折り返す（任意ラップ後の微調整）
-        label.Wrap(460)
+        label.Wrap(260)
         btn = wx.Button(panel, label=button_label)
         btn_font = btn.GetFont()
         btn_font.SetPointSize(max(12, btn_font.GetPointSize() + 3))
