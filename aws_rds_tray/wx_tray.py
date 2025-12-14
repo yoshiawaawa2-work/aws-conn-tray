@@ -686,9 +686,9 @@ def open_qt_webview_authorize(
     ]
     env = os.environ.copy()
     env["QTWEBENGINE_CHROMIUM_FLAGS"] = (
-        "--disable-gpu --disable-software-rasterizer "
-        "--disable-features=VaapiVideoDecoder --disable-dev-shm-usage --no-sandbox "
-        "--disable-gpu-compositing --disable-webgl"
+        "--disable-gpu "
+        "--disable-features=VaapiVideoDecoder "
+        "--disable-dev-shm-usage"
     )
     env["LIBVA_DRIVER_NAME"] = "mesa"
     env["LIBGL_ALWAYS_SOFTWARE"] = "1"

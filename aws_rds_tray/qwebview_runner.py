@@ -44,9 +44,9 @@ def run_webview(authorize_url: str, storage_path: Optional[str] = None) -> int:
     # - single-process で共有メモリを避ける
     # - GPU/GL/Sandbox をオフにする
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
-        "--disable-gpu --disable-software-rasterizer "
-        "--disable-features=VaapiVideoDecoder --disable-dev-shm-usage --no-sandbox "
-        "--disable-gpu-compositing --disable-webgl"
+        "--disable-gpu "
+        "--disable-features=VaapiVideoDecoder "
+        "--disable-dev-shm-usage"
     )
     os.environ["LIBVA_DRIVER_NAME"] = "mesa"
     os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"

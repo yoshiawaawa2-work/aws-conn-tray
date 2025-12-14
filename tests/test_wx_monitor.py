@@ -262,8 +262,9 @@ def test_open_pywebview_authorize(monkeypatch):
     # デフォルトで GPU/VA-API/Sandbox を無効化し、X11 + ソフトウェアレンダを強制する
     flags = env.get("QTWEBENGINE_CHROMIUM_FLAGS")
     assert "--disable-gpu" in flags
-    assert "--disable-software-rasterizer" in flags
-    assert "--single-process" not in flags  # single-process は外した
+    assert "--disable-features=VaapiVideoDecoder" in flags
+    assert "--disable-dev-shm-usage" in flags
+    assert "--no-sandbox" not in flags
     assert env.get("LIBVA_DRIVER_NAME") == "mesa"
     assert env.get("LIBGL_ALWAYS_SOFTWARE") == "1"
     assert env.get("QTWEBENGINE_DISABLE_SANDBOX") == "1"
