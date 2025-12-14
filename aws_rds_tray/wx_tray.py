@@ -933,6 +933,34 @@ class MiniPrompt(wx.Frame):
         panel.Bind(wx.EVT_LEFT_DOWN, self._on_click)
         label.Bind(wx.EVT_LEFT_DOWN, self._on_click)
 
+    def show_bottom_right(self):
+        try:
+            scr_w, scr_h = wx.GetDisplaySize()
+            w, h = self.GetSize()
+            x = max(0, scr_w - w - 20)
+            y = max(0, scr_h - h - 40)
+            self.SetPosition((x, y))
+            # フォーカスを奪わずに表示
+            if hasattr(self, "ShowWithoutActivating"):
+                self.ShowWithoutActivating()
+            else:
+                self.Show()
+            self.Raise()
+        except Exception:
+            self.Show()
+
+    def _on_click(self, _evt=None):
+        try:
+            if self.on_click:
+                self.on_click()
+        except Exception as e:
+            log_message(f"[wx-mini] click handler error: {e}")
+        finally:
+            try:
+                self.Destroy()
+            except Exception:
+                pass
+
 
 def _wrap_text_for_prompt(text: str, width: int = 20) -> str:
     """
@@ -968,22 +996,6 @@ def _wrap_text_for_prompt(text: str, width: int = 20) -> str:
             for i in range(0, len(ln), width):
                 final_lines.append(ln[i : i + width])
     return "\n".join(final_lines)
-
-    def show_bottom_right(self):
-        try:
-            scr_w, scr_h = wx.GetDisplaySize()
-            w, h = self.GetSize()
-            x = max(0, scr_w - w - 20)
-            y = max(0, scr_h - h - 40)
-            self.SetPosition((x, y))
-            # フォーカスを奪わずに表示
-            if hasattr(self, "ShowWithoutActivating"):
-                self.ShowWithoutActivating()
-            else:
-                self.Show()
-            self.Raise()
-        except Exception:
-            self.Show()
 
     def _on_click(self, _evt=None):
         try:
