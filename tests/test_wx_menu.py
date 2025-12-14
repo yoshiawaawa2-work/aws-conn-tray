@@ -2,7 +2,7 @@ import importlib.util
 
 import pytest
 
-from aws_rds_tray import wx_tray
+from aws_conn_tray import wx_tray
 
 
 @pytest.mark.skipif(importlib.util.find_spec("wx") is None, reason="wxPython not installed")

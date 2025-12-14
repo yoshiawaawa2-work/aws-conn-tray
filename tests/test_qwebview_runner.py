@@ -1,4 +1,4 @@
-from aws_rds_tray.qwebview_runner import _is_callback_url
+from aws_conn_tray.qwebview_runner import _is_callback_url
 
 
 def test_is_callback_url():

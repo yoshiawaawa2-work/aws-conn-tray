@@ -1,5 +1,5 @@
 
-# aws-rds-tray
+# aws-conn-tray
 
 AWS SSO トークンと SSM ポートフォワード（RDS 用）を監視する Ubuntu 用トレイ常駐アプリ一式です。GUI は wxPython ベースのみです。
 
@@ -22,9 +22,9 @@ AWS SSO トークンと SSM ポートフォワード（RDS 用）を監視する
   トレイ常駐アプリ本体（Python3）。wxPython 版のみ。
 
 - `config.example.json`  
-  設定ファイルのサンプル。`~/.config/aws-rds-tray/config.json` にコピーして使用します。
+  設定ファイルのサンプル。`config/config.json` にコピーして使用します。
 
-- `systemd/aws-rds-tray.service`  
+- `systemd/aws-conn-tray.service`  
   systemd --user 用のサービス定義ファイル。自動起動設定用。
 
 - `icons/green.png`  
@@ -53,7 +53,7 @@ AWS SSO トークンと SSM ポートフォワード（RDS 用）を監視する
 例:
 
 ```bash
-mv aws-rds-tray ~/aws-rds-tray
+mv aws-conn-tray ~/aws-conn-tray
 ```
 
 ### 2. 設定ファイルを配置
@@ -61,8 +61,8 @@ mv aws-rds-tray ~/aws-rds-tray
 `config/config.example.json` を同階層の `config/config.json` にコピーして編集します（アプリはリポジトリ内の `config/config.json` を参照します）。
 
 ```bash
-cp ~/aws-rds-tray/config/config.example.json ~/aws-rds-tray/config/config.json
-nano ~/aws-rds-tray/config/config.json
+cp ~/aws-conn-tray/config/config.example.json ~/aws-conn-tray/config/config.json
+nano ~/aws-conn-tray/config/config.json
 ```
 
 編集ポイント:

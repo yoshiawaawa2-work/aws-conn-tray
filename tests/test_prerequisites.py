@@ -1,4 +1,4 @@
-from aws_rds_tray import prerequisites
+from aws_conn_tray import prerequisites
 
 
 def test_check_prerequisites_ok(monkeypatch):

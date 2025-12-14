@@ -2,7 +2,7 @@ import builtins
 from types import SimpleNamespace
 from unittest import mock
 
-import aws_rds_tray.ssm as ssm
+import aws_conn_tray.ssm as ssm
 
 
 def make_proc(rc=None, pid=1234):
@@ -65,7 +65,7 @@ def test_start_port_in_use_abort(monkeypatch):
 
 
 def test_stop_killpg_on_running(monkeypatch):
-    monkeypatch.setattr("aws_rds_tray.ssm._is_port_in_use", lambda port: False)
+    monkeypatch.setattr("aws_conn_tray.ssm._is_port_in_use", lambda port: False)
     pf = ssm.SsmPortForward(
         instance_id="i-123",
         profile="p",

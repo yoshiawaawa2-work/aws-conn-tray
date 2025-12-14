@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from aws_rds_tray import wx_tray
+from aws_conn_tray import wx_tray
 
 
 def skip_if_no_wx():
@@ -124,7 +124,7 @@ def test_qt_webview_crash_triggers_browser_fallback(monkeypatch):
 
 
 def test_wrap_text_for_prompt():
-    from aws_rds_tray.wx_tray import _wrap_text_for_prompt
+    from aws_conn_tray.wx_tray import _wrap_text_for_prompt
 
     msg = "これはとても長い日本語の文面です ブラウザ フォールバック を 促します"
     wrapped = _wrap_text_for_prompt(msg, width=20)
@@ -135,7 +135,7 @@ def test_wrap_text_for_prompt():
 
 
 def test_show_prompts_wrap_text(monkeypatch):
-    from aws_rds_tray import wx_tray as wx_tray_module
+    from aws_conn_tray import wx_tray as wx_tray_module
     app = wx_tray.WxTrayApp.__new__(wx_tray.WxTrayApp)
     app._mini_prompt = None
     app._webview_running = False
@@ -165,7 +165,7 @@ def test_show_prompts_wrap_text(monkeypatch):
 
 
 def test_mini_prompt_size_constants():
-    from aws_rds_tray.wx_tray import MINI_PROMPT_SIZE
+    from aws_conn_tray.wx_tray import MINI_PROMPT_SIZE
     # 横幅は 20 文字程度に合わせてコンパクト
     assert MINI_PROMPT_SIZE[0] <= 340
     assert MINI_PROMPT_SIZE[1] <= 200
@@ -263,7 +263,7 @@ def test_open_pywebview_authorize(monkeypatch):
     ok = wx_tray.open_qt_webview_authorize("https://example.com/auth", storage_dir="/tmp/test-webview")
     assert ok is True
     cmd = created["args"]
-    assert "-m" in cmd and "aws_rds_tray.qwebview_runner" in cmd
+    assert "-m" in cmd and "aws_conn_tray.qwebview_runner" in cmd
     assert "/tmp/test-webview" in cmd
     env = created["env"]
     assert env is not None

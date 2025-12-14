@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 import sys
 
-from aws_rds_tray.config_loader import load_config
-from aws_rds_tray.logger import notify
-from aws_rds_tray.prerequisites import ensure_supported_os, check_prerequisites
+from aws_conn_tray.config_loader import load_config
+from aws_conn_tray.logger import notify
+from aws_conn_tray.prerequisites import ensure_supported_os, check_prerequisites
 
 
 def main():
@@ -27,7 +27,7 @@ def main():
         # ここではログだけ残して継続する
 
     try:
-        from aws_rds_tray.wx_tray import run_wx_app
+        from aws_conn_tray.wx_tray import run_wx_app
     except Exception as e:
         notify("wx バックエンド起動失敗", f"wxPython を読み込めません: {e}")
         sys.exit(1)

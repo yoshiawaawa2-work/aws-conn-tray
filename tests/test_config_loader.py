@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from aws_rds_tray import config_loader
+from aws_conn_tray import config_loader
 
 
 def test_load_config_reads_all_fields(monkeypatch, tmp_path: Path):

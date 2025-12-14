@@ -2,7 +2,7 @@ import types
 
 import pytest
 
-from aws_rds_tray import wx_tray
+from aws_conn_tray import wx_tray
 
 
 class DummyProc:
