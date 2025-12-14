@@ -339,6 +339,15 @@ class WxTrayApp:
 
         def worker():
             try:
+                def call_ui(fn: Callable[[], None]):
+                    try:
+                        if wx.GetApp() is not None and hasattr(wx, "CallAfter"):
+                            wx.CallAfter(fn)
+                        else:
+                            fn()
+                    except Exception as e:
+                        log_message(f"[wx-refresh] call_ui error: {e}")
+
                 url, code = _fetch_authorize_url(
                     self.config.profile,
                     self.config.region,
@@ -348,10 +357,10 @@ class WxTrayApp:
                 if url and "authorize" in url.lower():
                     log_message(f"[wx-refresh] authorize url fetched: {url}")
                     # 自動で WebView を開き、失敗時は MiniPrompt/通知がフォールバック
-                    start_sso_login_webview(url)
+                    call_ui(lambda: start_sso_login_webview(url))
                 else:
                     msg = "認可URLの取得に失敗しました。以下のボタンで再試行してください。"
-                    self._show_sso_prompt(self.config.sso_start_url, msg, "再試行")
+                    call_ui(lambda: self._show_sso_prompt(self.config.sso_start_url, msg, "再試行"))
             finally:
                 self._refreshing = False
 

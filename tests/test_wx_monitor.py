@@ -333,11 +333,18 @@ def test_refresh_webview_fallback(monkeypatch):
         called["opened"] += 1
         return True
     monkeypatch.setattr(wx_tray, "start_sso_login_webview", fake_start)
+    # CallAfter で UI 呼び出しを記録し、即時実行
+    def fake_callafter(fn, *a, **k):
+        called["callafter"] = True
+        fn()
+    monkeypatch.setattr(wx_tray.wx, "CallAfter", fake_callafter)
+    monkeypatch.setattr(wx_tray.wx, "GetApp", lambda: object())
     app._show_sso_prompt = lambda *a, **k: called.setdefault("prompt", True)
 
     wx_tray.WxTrayApp._start_sso_refresh(app)
     assert called["opened"] == 1
     assert called["prompt"] is None  # 成功時はダイアログ不要
+    assert called.get("callafter") is True
 
 
 def test_refresh_webview_fetch_fail(monkeypatch):
@@ -363,10 +370,18 @@ def test_refresh_webview_fetch_fail(monkeypatch):
     monkeypatch.setattr(wx_tray.threading, "Thread", fake_thread)
     monkeypatch.setattr(wx_tray, "_fetch_authorize_url", lambda *a, **k: (None, None))
     monkeypatch.setattr(wx_tray, "start_sso_login_webview", lambda url: False)
-    app._show_sso_prompt = lambda url, msg, btn="開く": called.setdefault("prompt", (url, msg, btn))
+    def fake_prompt(url, msg, btn="開く"):
+        called.setdefault("prompt", (url, msg, btn))
+    app._show_sso_prompt = fake_prompt
+    def fake_callafter(fn, *a, **k):
+        called["callafter"] = True
+        fn()
+    monkeypatch.setattr(wx_tray.wx, "CallAfter", fake_callafter)
+    monkeypatch.setattr(wx_tray.wx, "GetApp", lambda: object())
 
     wx_tray.WxTrayApp._start_sso_refresh(app)
     assert "prompt" in called  # 認可URL取得失敗で再試行ダイアログが呼ばれる
+    assert called.get("callafter") is True
 
 
 def test_ssm_reconnect_and_icon(monkeypatch):
