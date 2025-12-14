@@ -123,6 +123,19 @@ def test_qt_webview_crash_triggers_browser_fallback(monkeypatch):
     assert "msg" in called_prompt
 
 
+def test_wrap_text_for_prompt():
+    from aws_rds_tray.wx_tray import _wrap_text_for_prompt
+
+    msg = "これはとても長い日本語の文面です ブラウザ フォールバック を 促します"
+    wrapped = _wrap_text_for_prompt(msg, width=20)
+    lines = wrapped.splitlines()
+    assert all(len(line) <= 20 for line in lines)
+    # 英単語は途中で切られない
+    assert any("フォールバック" in line for line in lines)
+
+
+
+
 def test_on_sso_login_uses_webview(monkeypatch):
     # メニュー「SSO ログイン」で認可URLを取得し、_launch_webview が呼ばれること
     app = _bare_app()
