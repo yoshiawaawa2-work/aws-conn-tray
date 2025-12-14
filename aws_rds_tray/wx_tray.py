@@ -899,14 +899,15 @@ class MiniPrompt(wx.Frame):
         panel = wx.Panel(self)
         panel.SetBackgroundColour(wx.Colour(245, 245, 245))
         sizer = wx.BoxSizer(wx.VERTICAL)
-        label = wx.StaticText(panel, label=message, style=wx.ALIGN_LEFT)
+        wrapped = _wrap_text_for_prompt(message, width=20)
+        label = wx.StaticText(panel, label=wrapped, style=wx.ALIGN_LEFT)
         # 読みやすいフォントに調整
         font = label.GetFont()
         font.SetPointSize(max(12, font.GetPointSize() + 3))
         font.SetWeight(wx.FONTWEIGHT_BOLD)
         label.SetFont(font)
         label.SetForegroundColour(wx.Colour(0, 0, 0))
-        # 長い文言でも折り返す（ボーダーと余白を考慮し広めに）
+        # 長い文言でも折り返す（任意ラップ後の微調整）
         label.Wrap(460)
         btn = wx.Button(panel, label=button_label)
         btn_font = btn.GetFont()
@@ -930,6 +931,42 @@ class MiniPrompt(wx.Frame):
         self.Bind(wx.EVT_LEFT_DOWN, self._on_click)
         panel.Bind(wx.EVT_LEFT_DOWN, self._on_click)
         label.Bind(wx.EVT_LEFT_DOWN, self._on_click)
+
+
+def _wrap_text_for_prompt(text: str, width: int = 20) -> str:
+    """
+    日本語全角20文字相当で改行する。空白区切りの単語は途中で切らない。
+    空白の無い長文は幅で強制的に切る。
+    """
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        tokens = raw_line.split()
+        if not tokens:
+            lines.append("")
+            continue
+        current = ""
+        for tok in tokens:
+            # 単語が幅を超える場合は強制分割
+            while len(tok) > width:
+                lines.append(tok[:width])
+                tok = tok[width:]
+            if len(current) + (1 if current else 0) + len(tok) <= width:
+                current = f"{current} {tok}".strip()
+            else:
+                if current:
+                    lines.append(current)
+                current = tok
+        if current:
+            lines.append(current)
+    # 念のため幅を超える行を強制カット
+    final_lines: list[str] = []
+    for ln in lines:
+        if len(ln) <= width:
+            final_lines.append(ln)
+        else:
+            for i in range(0, len(ln), width):
+                final_lines.append(ln[i : i + width])
+    return "\n".join(final_lines)
 
     def show_bottom_right(self):
         try:
