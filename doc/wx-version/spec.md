@@ -3,11 +3,11 @@
 | 項目 | 詳細 |
 | --- | --- |
 | 起動 | wx 版のみ。`python tray_app.py` で起動（GTK 版は廃止）。|
-| アプリ構造 | `wx_tray.py` の `WxTrayApp` が隠しフレーム + `wx.adv.TaskBarIcon`。`wx.Timer` で監視。|
+| アプリ構造 | `aws_conn_tray.wx_tray.WxTrayApp` が隠しフレーム + `wx.adv.TaskBarIcon`。`wx.Timer` で監視。|
 | メニュー | 「⚙️ 設定」「SSO ログイン」「ポートフォワード再接続」「終了」。|
 | アイコン色 | 緑=トンネル/トークン正常、黄=再接続中・遷移中、赤=トークン無効/致命エラー。|
-| SSO 認証表示 | PySide6 + QtWebEngine をサブプロセス起動（`aws_rds_tray.qwebview_runner`）。認可 URL を開き、`127.0.0.1/.../oauth/callback?code=` を検知して自動クローズ。|
-| WebView ストレージ | QtWebEngine の persistent storage を `~/.cache/aws-rds-tray/qt-webview` に設定し、クッキー継続を狙う。|
+| SSO 認証表示 | PySide6 + QtWebEngine をサブプロセス起動（`aws_conn_tray.qwebview_runner`）。認可 URL を開き、`127.0.0.1/.../oauth/callback?code=` を検知して自動クローズ。|
+| WebView ストレージ | QtWebEngine の persistent storage を `~/.cache/aws-conn-tray/qt-webview` に設定し、クッキー継続を狙う。|
 | フォールバック | Qt WebView 起動に失敗した場合のみデフォルトブラウザで認可 URL を開く。|
 | 認可 URL 取得 | `aws sso login --no-browser --profile <profile> --region <region>` を実行し、stdout から認可 URL をパース。POSIX は pty、Windows は pipe で実行。|
 | トークン監視 | 監視間隔 `tunnel_check_interval_seconds` ごとに SSO トークン有効期限を確認し、margin (`sso_auto_refresh_margin_seconds`) 内なら再認証を促す。無効・期限切れでアイコン赤。|

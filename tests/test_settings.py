@@ -1,4 +1,4 @@
-from aws_rds_tray.wx_tray import validate_settings_input
+from aws_conn_tray.wx_tray import validate_settings_input
 
 
 def test_validate_config_success():

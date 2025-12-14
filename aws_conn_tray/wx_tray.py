@@ -688,7 +688,7 @@ def open_qt_webview_authorize(
     cmd = [
         sys.executable,
         "-m",
-        "aws_rds_tray.qwebview_runner",
+        "aws_conn_tray.qwebview_runner",
         url,
         "--storage-path",
         storage_dir,

@@ -2,7 +2,7 @@ import os
 import datetime
 import json
 
-from aws_rds_tray import sso
+from aws_conn_tray import sso
 
 
 def test_parse_device_flow_picks_authorize_url():

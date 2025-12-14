@@ -93,7 +93,7 @@ def run_webview(authorize_url: str, storage_path: Optional[str] = None) -> int:
         if _is_callback_url(url_str):
             sys.stderr.write("[qwebview] callback detected -> quit\n")
             try:
-                from aws_rds_tray.logger import notify, log_message
+                from aws_conn_tray.logger import notify, log_message
                 notify(
                     "SSO ログイン完了",
                     "認証コードを検出したため WebView を閉じます。",
