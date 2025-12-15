@@ -1006,18 +1006,6 @@ def _wrap_text_for_prompt(text: str, width: int = 20) -> str:
                 final_lines.append(ln[i : i + width])
     return "\n".join(final_lines)
 
-    def _on_click(self, _evt=None):
-        try:
-            if self.on_click:
-                self.on_click()
-        except Exception as e:
-            log_message(f"[wx-mini] click handler error: {e}")
-        finally:
-            try:
-                self.Destroy()
-            except Exception:
-                pass
-
 
 # ===== SSO 認可URL取得（ブラウザ開き専用の軽量版） =====
 
@@ -1057,6 +1045,7 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
     use_pty = PTY_AVAILABLE and os.name == "posix"
     master_fd = None
     slave_fd = None
+    proc: Optional[subprocess.Popen] = None
     try:
         if use_pty:
             master_fd, slave_fd = pty.openpty()
@@ -1074,70 +1063,85 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
         return None, None
 
     try:
-        if use_pty:
-            while time.time() < deadline:
-                if proc.poll() is not None:
-                    break
-                ready, _, _ = select.select(read_fds, [], [], 1)
-                for stream in ready:
-                    line_bytes = os.read(stream, 4096)
-                    if not line_bytes:
-                        continue
-                    line = line_bytes.decode(errors="ignore")
-                    stdout_acc += line
-                    u, c = _parse_authorize_url(line)
-                    if u and "authorize" in u.lower():
-                        url, code = u, c
-                        log_message(f"[wx-auth-url] authorize url fetched (stream): {u}")
-                        return url, code
-        else:
-            # Windows など select/pty が使えない環境ではまとめて読み取る
+        try:
+            if use_pty:
+                while time.time() < deadline:
+                    if proc.poll() is not None:
+                        break
+                    ready, _, _ = select.select(read_fds, [], [], 1)
+                    for stream in ready:
+                        line_bytes = os.read(stream, 4096)
+                        if not line_bytes:
+                            continue
+                        line = line_bytes.decode(errors="ignore")
+                        stdout_acc += line
+                        u, c = _parse_authorize_url(line)
+                        if u and "authorize" in u.lower():
+                            url, code = u, c
+                            log_message(f"[wx-auth-url] authorize url fetched (stream): {u}")
+                            break
+                    if url:
+                        break
+            else:
+                # Windows など select/pty が使えない環境ではまとめて読み取る
+                try:
+                    out, err = proc.communicate(timeout=max_wait)
+                except subprocess.TimeoutExpired:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    out, err = proc.communicate()
+                stdout_acc += out or ""
+                stderr_acc += err or ""
+                u, c = _parse_authorize_url(stdout_acc)
+                if u and "authorize" in (u or "").lower():
+                    url, code = u, c
+                    log_message(f"[wx-auth-url] authorize url fetched (pipe): {u}")
+        except Exception as e:
+            log_message(f"[wx-auth-url] error while reading: {e}")
             try:
-                out, err = proc.communicate(timeout=max_wait)
-            except subprocess.TimeoutExpired:
+                proc.kill()
+            except Exception:
+                pass
+
+        rc = proc.poll()
+        log_message(f"[wx-auth-url] rc={rc} stdout_len={len(stdout_acc)} stderr_len={len(stderr_acc)}")
+
+        if not url:
+            # 最終的に見つからなければ結合して再度パース
+            u2, c2 = _parse_authorize_url(stdout_acc + "\n" + stderr_acc)
+            if u2 and "authorize" in (u2 or "").lower():
+                url, code = u2, c2
+
+        if not url:
+            log_message(f"[wx-auth-url] authorize url not found. stdout={stdout_acc!r} stderr={stderr_acc!r}")
+            return None, code
+
+        return url, code
+    finally:
+        if proc:
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=2)
+                    except Exception:
+                        pass
+            except Exception:
                 try:
                     proc.kill()
+                    try:
+                        proc.wait(timeout=1)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
-                out, err = proc.communicate()
-            stdout_acc += out or ""
-            stderr_acc += err or ""
-            u, c = _parse_authorize_url(stdout_acc)
-            if u and "authorize" in (u or "").lower():
-                url, code = u, c
-                log_message(f"[wx-auth-url] authorize url fetched (pipe): {u}")
-                return url, code
-    except Exception as e:
-        log_message(f"[wx-auth-url] error while reading: {e}")
-        try:
-            proc.kill()
-        except Exception:
-            pass
-
-    rc = proc.poll()
-    log_message(f"[wx-auth-url] rc={rc} stdout_len={len(stdout_acc)} stderr_len={len(stderr_acc)}")
-
-    if not url:
-        # 最終的に見つからなければ結合して再度パース
-        u2, c2 = _parse_authorize_url(stdout_acc + "\n" + stderr_acc)
-        if u2 and "authorize" in (u2 or "").lower():
-            url, code = u2, c2
-
-    if not url:
-        log_message(f"[wx-auth-url] authorize url not found. stdout={stdout_acc!r} stderr={stderr_acc!r}")
-        return None, code
-
-    # 後片付け: PTYを開いていたら閉じる
-    if use_pty:
-        try:
-            os.close(master_fd)
-        except Exception:
-            pass
-        try:
-            os.close(slave_fd)
-        except Exception:
-            pass
-    return url, code
+        if use_pty:
+            for fd in (master_fd, slave_fd):
+                if fd is not None:
+                    with contextlib.suppress(Exception):
+                        os.close(fd)
 
 
 def _is_request_approved(title: str, url: str, body: str) -> bool:
