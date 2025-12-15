@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import time
 
 import pytest
@@ -390,6 +391,60 @@ def test_refresh_webview_fetch_fail(monkeypatch):
     wx_tray.WxTrayApp._start_sso_refresh(app)
     assert "prompt" in called  # 認可URL取得失敗で再試行ダイアログが呼ばれる
     assert called.get("callafter") is True
+
+
+@pytest.mark.skipif(os.name != "posix", reason="PTY handling is POSIX only")
+def test_fetch_authorize_url_cleans_up_pty(monkeypatch):
+    # PTY 経由で URL を取得した場合でもプロセスと FD が掃除されること
+    called = {"terminate": 0, "wait": 0, "kill": 0, "reads": 0}
+    master_fd, slave_fd = 10, 11
+
+    monkeypatch.setattr(wx_tray, "PTY_AVAILABLE", True)
+    monkeypatch.setattr(wx_tray.pty, "openpty", lambda: (master_fd, slave_fd))
+
+    def fake_select(_r, _w, _e, _t):
+        # 1 回だけ読み取り可能にする
+        if called["reads"] == 0:
+            return ([master_fd], [], [])
+        return ([], [], [])
+
+    monkeypatch.setattr(wx_tray.select, "select", fake_select)
+
+    def fake_read(fd, size):
+        called["reads"] += 1
+        if called["reads"] == 1:
+            return b"https://oidc.example.com/authorize?foo=1\nCode: 1A2B-3C4D\n"
+        return b""
+
+    monkeypatch.setattr(wx_tray.os, "read", fake_read)
+
+    close_calls = []
+    monkeypatch.setattr(wx_tray.os, "close", lambda fd: close_calls.append(fd))
+    monkeypatch.setattr(wx_tray, "log_message", lambda *a, **k: None)
+
+    class DummyProc:
+        def __init__(self):
+            self._rc = None
+        def poll(self):
+            return self._rc
+        def terminate(self):
+            called["terminate"] += 1
+        def wait(self, timeout=None):
+            called["wait"] += 1
+            self._rc = 0
+        def kill(self):
+            called["kill"] += 1
+            self._rc = -9
+
+    proc = DummyProc()
+    monkeypatch.setattr(wx_tray.subprocess, "Popen", lambda *a, **k: proc)
+
+    url, code = wx_tray._fetch_authorize_url("p", "r", "https://start.example.com", timeout=5)
+
+    assert "authorize" in url
+    assert code == "1A2B-3C4D"
+    assert called["terminate"] >= 1 or called["kill"] >= 1
+    assert master_fd in close_calls and slave_fd in close_calls
 
 
 def test_ssm_reconnect_and_icon(monkeypatch):
