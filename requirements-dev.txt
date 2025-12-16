@@ -16,3 +16,4 @@ pyinstaller
 
 # wxPython (トレイ/メニュー/GUI 用)
 wxPython==4.2.1
+psutil

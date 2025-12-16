@@ -10,6 +10,13 @@ from aws_conn_tray.config_loader import ForwardTarget
 from .logger import notify, log_message
 from . import platforms
 
+try:
+    import psutil
+
+    PSUTIL_AVAILABLE = True
+except Exception:
+    PSUTIL_AVAILABLE = False
+
 
 def _cleanup_lingering_sessions(reason: str = "") -> None:
     """
@@ -20,6 +27,36 @@ def _cleanup_lingering_sessions(reason: str = "") -> None:
     patterns: List[str] = ["session-manager-plugin", "aws ssm start-session"]
     if reason:
         log_message(f"[ssm] cleanup lingering sessions ({reason})")
+    # psutil が使える場合はクロスプラットフォームに安全終了
+    if PSUTIL_AVAILABLE:
+        for pat in patterns:
+            targets: List[psutil.Process] = []
+            try:
+                for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+                    info = proc.info
+                    name = info.get("name") or ""
+                    cmdline = " ".join(info.get("cmdline") or [])
+                    if pat in name or pat in cmdline:
+                        targets.append(proc)
+            except Exception as e:
+                log_message(f"[ssm] psutil scan failed for '{pat}': {e}")
+                continue
+
+            for proc in targets:
+                try:
+                    log_message(f"[ssm] cleanup (psutil) term pid={proc.pid} pat={pat}")
+                    proc.terminate()
+                    proc.wait(timeout=1.5)
+                except psutil.TimeoutExpired:
+                    try:
+                        log_message(f"[ssm] cleanup (psutil) kill pid={proc.pid} pat={pat}")
+                        proc.kill()
+                    except Exception:
+                        pass
+                except Exception as e:
+                    log_message(f"[ssm] cleanup (psutil) error pid={getattr(proc,'pid',None)}: {e}")
+        return
+
     if platforms.is_windows():
         for pat in patterns:
             try:
@@ -75,6 +112,28 @@ def _log_port_occupant(port: int) -> None:
     ポートを誰が掴んでいるかをログに出力（利用可能なら ss/lsof を利用）。
     Linux 限定の補助。その他 OS ではスキップ。
     """
+    if PSUTIL_AVAILABLE:
+        try:
+            lines: List[str] = []
+            for conn in psutil.net_connections(kind="inet"):
+                laddr = conn.laddr
+                if not laddr or getattr(laddr, "port", None) != port:
+                    continue
+                pid = conn.pid
+                proc_name = ""
+                if pid:
+                    try:
+                        proc = psutil.Process(pid)
+                        proc_name = proc.name()
+                    except Exception:
+                        proc_name = ""
+                lines.append(f"pid={pid} name={proc_name} status={conn.status}")
+            if lines:
+                log_message(f"[ssm] port {port} occupant via psutil:\n" + "\n".join(lines))
+                return
+        except Exception as e:
+            log_message(f"[ssm] port occupant check (psutil) failed: {e}")
+
     if not platforms.is_linux():
         return
     cmds = [

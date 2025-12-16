@@ -89,6 +89,7 @@ systemctl --user disable --now aws-conn-tray.service
 ```
 
 #### Windows (タスク スケジューラ例)
+付属のテンプレート: `doc/autostart/windows/task_aws_conn_tray.xml`（文字コード UTF-16）
 1. 「タスク スケジューラ」を開き、「基本タスクの作成」。  
 2. トリガーは「ログオン時」。  
 3. 操作は「プログラムの開始」で以下を指定:  
@@ -97,8 +98,9 @@ systemctl --user disable --now aws-conn-tray.service
 4. 実行ユーザーを現在のユーザーにし、必要なら「最上位の特権で実行する」を有効化。
 
 #### macOS (LaunchAgent 例)
-- `~/Library/LaunchAgents/aws.conn.tray.plist` を作成し、`ProgramArguments` に `python3` と `tray_app.py` を記載。  
-- `launchctl load ~/Library/LaunchAgents/aws.conn.tray.plist` で読み込み、`launchctl start ...` で起動。plist 雛形は環境に合わせて用意してください。
+- 付属の plist 雛形: `doc/autostart/macos/aws.conn.tray.plist`（`YOUR_USERNAME` を置換して使用）。  
+- `launchctl load ~/Library/LaunchAgents/aws.conn.tray.plist` で読み込み、`launchctl start aws.conn.tray` で起動。  
+- `ProgramArguments` の python パスは環境に合わせて変更してください。
 
 ### 6. アンインストール
 #### Linux
