@@ -109,3 +109,38 @@ def test_install_and_uninstall_creates_shortcuts(tmp_path, monkeypatch):
     installer_core.uninstall_app(install_dir, shortcuts_dir=shortcuts_dir)
     assert not install_dir.exists()
     assert not shortcuts_dir.exists()
+
+
+def test_enable_disable_autostart_dry_run(monkeypatch):
+    monkeypatch.setattr(installer_core.platforms, "is_windows", lambda: False)
+    monkeypatch.setattr(installer_core.platforms, "is_macos", lambda: False)
+    cmds_on = installer_core.enable_autostart(Path("/tmp/app"), dry_run=True)
+    cmds_off = installer_core.disable_autostart(dry_run=True)
+    assert any("systemctl" in c[0] for c in cmds_on)
+    assert any("disable" in c for c in cmds_off[0])
+
+
+def test_enable_autostart_windows(monkeypatch):
+    monkeypatch.setattr(installer_core.platforms, "is_windows", lambda: True)
+    monkeypatch.setattr(installer_core.platforms, "is_macos", lambda: False)
+    seen = []
+
+    def fake_run(cmd, check=False):
+        seen.append(cmd)
+        return type("R", (), {"returncode": 0})()
+
+    installer_core.enable_autostart(Path("C:/app"), dry_run=False, runner=fake_run)
+
+    assert any("schtasks" in c for c in seen[0])
+
+
+def test_perform_install_preview(monkeypatch, tmp_path):
+    monkeypatch.setattr(installer_core, "preinstall_check", lambda: installer_core.PreinstallResult(ok=True, issues=[], suggested_installs=[]))
+    called = {}
+    monkeypatch.setattr(installer_core, "install_app", lambda *a, **k: called.setdefault("install", True))
+
+    opts = installer_core.InstallOptions(install_dir=tmp_path, preview=True)
+    res = installer_core.perform_install(opts)
+
+    assert res.ok is True
+    assert called == {}  # preview では install_app を呼ばない
