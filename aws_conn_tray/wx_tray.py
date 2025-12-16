@@ -28,6 +28,7 @@ from .logger import log_message, notify
 from .config_loader import Config, ForwardTarget, load_config
 from .sso import check_sso_token, is_sso_session_valid, start_sso_login_browser
 from .ssm import SsmPortForward, _cleanup_lingering_sessions
+from . import platforms
 
 WEBVIEW_STORAGE_DIR = os.path.expanduser("~/.cache/aws_conn_tray/webview")
 QT_WEBVIEW_STORAGE_DIR = os.path.expanduser("~/.cache/aws_conn_tray/qt-webview")
@@ -966,17 +967,18 @@ def open_qt_webview_authorize(
         storage_dir,
     ]
     env = os.environ.copy()
-    env["QTWEBENGINE_CHROMIUM_FLAGS"] = (
-        "--disable-gpu "
-        "--disable-features=VaapiVideoDecoder "
-        "--disable-dev-shm-usage"
-    )
-    env["LIBVA_DRIVER_NAME"] = "mesa"
-    env["LIBGL_ALWAYS_SOFTWARE"] = "1"
-    env["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
-    env["QT_QUICK_BACKEND"] = "software"
-    env["QT_QPA_PLATFORM"] = "xcb"
-    env["QT_OPENGL"] = "software"
+    if platforms.is_linux():
+        env["QTWEBENGINE_CHROMIUM_FLAGS"] = (
+            "--disable-gpu "
+            "--disable-features=VaapiVideoDecoder "
+            "--disable-dev-shm-usage"
+        )
+        env["LIBVA_DRIVER_NAME"] = "mesa"
+        env["LIBGL_ALWAYS_SOFTWARE"] = "1"
+        env["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
+        env["QT_QUICK_BACKEND"] = "software"
+        env["QT_QPA_PLATFORM"] = "xcb"
+        env["QT_OPENGL"] = "software"
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env

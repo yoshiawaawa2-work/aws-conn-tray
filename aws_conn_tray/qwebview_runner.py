@@ -23,6 +23,7 @@ except Exception as e:
     QT_IMPORT_ERROR = str(e)
 
 DEFAULT_STORAGE = os.path.expanduser("~/.cache/aws_conn_tray/qt-webview")
+from aws_conn_tray import platforms
 
 
 def _is_callback_url(url_str: str) -> bool:
@@ -43,17 +44,18 @@ def run_webview(authorize_url: str, storage_path: Optional[str] = None) -> int:
     # - xcb を強制 (Wayland/VirtualBox でのクラッシュ回避)
     # - single-process で共有メモリを避ける
     # - GPU/GL/Sandbox をオフにする
-    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
-        "--disable-gpu "
-        "--disable-features=VaapiVideoDecoder "
-        "--disable-dev-shm-usage"
-    )
-    os.environ["LIBVA_DRIVER_NAME"] = "mesa"
-    os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
-    os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
-    os.environ["QT_QUICK_BACKEND"] = "software"
-    os.environ["QT_QPA_PLATFORM"] = "xcb"
-    os.environ["QT_OPENGL"] = "software"
+    if platforms.is_linux():
+        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
+            "--disable-gpu "
+            "--disable-features=VaapiVideoDecoder "
+            "--disable-dev-shm-usage"
+        )
+        os.environ["LIBVA_DRIVER_NAME"] = "mesa"
+        os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
+        os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
+        os.environ["QT_QUICK_BACKEND"] = "software"
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+        os.environ["QT_OPENGL"] = "software"
     sys.stderr.write(
         "[qwebview] env "
         f"QTWEBENGINE_CHROMIUM_FLAGS={os.environ.get('QTWEBENGINE_CHROMIUM_FLAGS')} "
