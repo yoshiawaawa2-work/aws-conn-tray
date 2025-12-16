@@ -5,6 +5,8 @@ import os
 import signal
 from typing import Optional, List
 
+from aws_conn_tray.config_loader import ForwardTarget
+
 from .logger import notify, log_message
 
 
@@ -67,13 +69,14 @@ def _log_port_occupant(port: int) -> None:
 
 
 class SsmPortForward:
-    def __init__(self, instance_id: str, profile: str, region: str, local_port: int, remote_host: str, remote_port: int) -> None:
-        self.instance_id = instance_id
-        self.profile = profile
-        self.region = region
-        self.local_port = local_port
-        self.remote_host = remote_host
-        self.remote_port = remote_port
+    """
+    1 つのポートフォワードセッションを管理する。
+    name を保持することでログや通知でどのフォワードか識別しやすくする。
+    """
+
+    def __init__(self, target: ForwardTarget) -> None:
+        # ForwardTarget をそのまま保持しておく（UI やログで参照するため）
+        self.target = target
         self.proc: Optional[subprocess.Popen] = None
 
     def start(self) -> bool:
@@ -82,33 +85,36 @@ class SsmPortForward:
         _cleanup_lingering_sessions("before start")
         # ローカルポート衝突を確認（他プロセスが掴んでいる場合は待機→諦める）
         for i in range(10):
-            if not _is_port_in_use(self.local_port):
+            if not _is_port_in_use(self.target.local_port):
                 break
-            log_message(f"[ssm] local port {self.local_port} in use, waiting... ({i+1}/10)")
-            _log_port_occupant(self.local_port)
+            log_message(f"[ssm] [{self.target.name}] local port {self.target.local_port} in use, waiting... ({i+1}/10)")
+            _log_port_occupant(self.target.local_port)
             time.sleep(0.5)
         else:
-            log_message(f"[ssm] local port {self.local_port} still in use; abort start-session")
-            _log_port_occupant(self.local_port)
-            notify("ポートフォワード", f"ローカルポート {self.local_port} が使用中です。")
+            log_message(f"[ssm] [{self.target.name}] local port {self.target.local_port} still in use; abort start-session")
+            _log_port_occupant(self.target.local_port)
+            notify("ポートフォワード", f"{self.target.name}: ローカルポート {self.target.local_port} が使用中です。")
             return False
 
         cmd = [
             "aws", "ssm", "start-session",
-            "--target", self.instance_id,
+            "--target", self.target.instance_id,
             "--document-name", "AWS-StartPortForwardingSessionToRemoteHost",
-            "--parameters", f"host={self.remote_host},portNumber={self.remote_port},localPortNumber={self.local_port}",
-            "--profile", self.profile,
-            "--region", self.region,
+            "--parameters", f"host={self.target.remote_host},portNumber={self.target.remote_port},localPortNumber={self.target.local_port}",
+            "--profile", self.target.profile,
+            "--region", self.target.region,
         ]
         try:
             self.proc = subprocess.Popen(cmd, start_new_session=True)
-            log_message(f"[ssm] start-session launched pid={self.proc.pid} local={self.local_port} -> {self.remote_host}:{self.remote_port}")
+            log_message(
+                f"[ssm] [{self.target.name}] start-session launched pid={self.proc.pid} "
+                f"local={self.target.local_port} -> {self.target.remote_host}:{self.target.remote_port}"
+            )
             # 早期異常終了チェック
             time.sleep(0.3)
             rc = self.proc.poll()
             if rc not in (None, 0):
-                log_message(f"[ssm] start-session exited early rc={rc}")
+                log_message(f"[ssm] [{self.target.name}] start-session exited early rc={rc}")
                 return False
             return True
         except FileNotFoundError:
@@ -116,8 +122,8 @@ class SsmPortForward:
             log_message("[ssm] aws command not found")
             return False
         except Exception as e:
-            notify("SSM セッション起動エラー", str(e))
-            log_message(f"[ssm] start-session error: {e}")
+            notify("SSM セッション起動エラー", f"{self.target.name}: {e}")
+            log_message(f"[ssm] [{self.target.name}] start-session error: {e}")
             return False
 
     def is_alive(self) -> bool:
@@ -140,13 +146,13 @@ class SsmPortForward:
                     pass
             # ポート解放を待つ（セッションマネージャが残る場合があるため少し粘る）
             for _ in range(20):
-                if not _is_port_in_use(self.local_port):
+                if not _is_port_in_use(self.target.local_port):
                     break
                 time.sleep(0.5)
             else:
-                log_message(f"[ssm] port {self.local_port} still in use after stop")
-                _log_port_occupant(self.local_port)
-        log_message(f"[ssm] stop-session pid={self.proc.pid if self.proc else 'None'}")
+                log_message(f"[ssm] [{self.target.name}] port {self.target.local_port} still in use after stop")
+                _log_port_occupant(self.target.local_port)
+        log_message(f"[ssm] [{self.target.name}] stop-session pid={self.proc.pid if self.proc else 'None'}")
         self.proc = None
         # 念のため追加で掃除
         _cleanup_lingering_sessions("after stop")

@@ -14,10 +14,7 @@ def main():
     config = load_config()
 
     ok, issues = check_prerequisites(
-        config.profile,
-        config.region,
-        config.instance_id,
-        config.remote_host,
+        config.forwards,
         require_ssm=False,  # トークンが無い状態でも起動し、アプリ側で再ログインを促す
     )
     if not ok:

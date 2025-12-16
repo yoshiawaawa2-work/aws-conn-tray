@@ -6,6 +6,9 @@ import subprocess
 import sys
 from typing import List, Tuple
 
+from aws_conn_tray.config_loader import ForwardTarget
+from aws_conn_tray import prerequisites as prereq_mod
+
 
 def get_app_root() -> str:
     """
@@ -22,7 +25,7 @@ def get_app_root() -> str:
 APP_ROOT = get_app_root()
 CONFIG_DIR = os.path.join(APP_ROOT, "config")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
-LOG_DIR = os.path.join(os.path.expanduser("~"), ".cache", "aws-rds-tray")
+LOG_DIR = os.path.join(os.path.expanduser("~"), ".cache", "aws_conn_tray")
 LOG_PATH = os.path.join(LOG_DIR, "tray.log")
 
 
@@ -92,51 +95,9 @@ def _check_profile_config(profile: str) -> List[str]:
     return issues
 
 
-def check_prerequisites(profile: str, region: str, instance_id: str, remote_host: str) -> Tuple[bool, List[str]]:
+def check_prerequisites(forwards: List[ForwardTarget]) -> Tuple[bool, List[str]]:
     """
-    前提条件をチェックし、(OK/NG, 問題リスト) を返す。
-    問題がある場合はアプリ/インストーラ側で通知・終了すること。
+    旧インストーラ用のラッパー関数。
+    - 引数を新しい複数フォワード形式に変更し、内部では aws_conn_tray.prerequisites を利用する。
     """
-    issues: List[str] = []
-
-    # aws CLI
-    aws_path = shutil.which("aws")
-    if not aws_path:
-        issues.append("aws CLI が見つかりません。AWS CLI v2 をインストールしてください。")
-    else:
-        code, out, err = _run_command([aws_path, "--version"])
-        version_line = out or err
-        if "aws-cli/2" not in version_line:
-            issues.append(f"AWS CLI v2 ではない可能性があります: {version_line}")
-
-    # session-manager-plugin
-    smp_path = shutil.which("session-manager-plugin")
-    if not smp_path:
-        issues.append("session-manager-plugin が見つかりません。AWS SSM Session Manager Plugin をインストールしてください。")
-
-    # プロファイル設定
-    issues.extend(_check_profile_config(profile))
-
-    # SSM でインスタンスを参照できるか軽く確認
-    if aws_path:
-        cmd = [
-            aws_path,
-            "ssm",
-            "describe-instance-information",
-            "--instance-information-filter-list",
-            f"key=InstanceIds,valueSet=[{instance_id}]",
-            "--profile",
-            profile,
-            "--region",
-            region,
-        ]
-        code, out, err = _run_command(cmd, timeout=10)
-        if code != 0:
-            detail = err or out or "不明なエラー"
-            issues.append(f"SSM でインスタンス {instance_id} を参照できません。権限やIDを確認してください: {detail}")
-
-    # remote_host チェック
-    if not remote_host:
-        issues.append("config.json の remote_host が設定されていません。RDS のエンドポイントを指定してください。")
-
-    return len(issues) == 0, issues
+    return prereq_mod.check_prerequisites(forwards)

@@ -7,6 +7,7 @@ from typing import Dict, Tuple
 import PySimpleGUI as sg
 
 from app_utils import check_prerequisites, log_message
+from aws_conn_tray.config_loader import ForwardTarget
 
 
 SUPPORTED_PLATFORMS = ("linux", "linux2", "win32")
@@ -28,6 +29,7 @@ def default_install_dir() -> str:
 def build_layout(default_dir: str) -> list:
     return [
         [sg.Text("インストール先"), sg.Input(default_dir, key="install_dir", size=(50, 1)), sg.FolderBrowse("参照")],
+        [sg.Text("フォワード名"), sg.Input("rds", key="forward_name", size=(30, 1))],
         [sg.Text("踏み台EC2インスタンスID"), sg.Input(key="instance_id", size=(50, 1))],
         [sg.Text("AWSプロファイル"), sg.Input(key="profile", size=(30, 1))],
         [sg.Text("リージョン"), sg.Input("ap-northeast-1", key="region", size=(20, 1))],
@@ -41,13 +43,14 @@ def build_layout(default_dir: str) -> list:
 
 
 def gather_values(values: Dict[str, str]) -> Tuple[bool, Dict[str, str]]:
-    required_fields = ["install_dir", "instance_id", "profile", "region", "remote_host", "sso_start_url"]
+    required_fields = ["install_dir", "forward_name", "instance_id", "profile", "region", "remote_host", "sso_start_url"]
     missing = [f for f in required_fields if not values.get(f)]
     if missing:
         sg.popup_error(f"未入力の項目があります: {', '.join(missing)}", keep_on_top=True)
         return False, {}
     return True, {
         "install_dir": values["install_dir"],
+        "forward_name": values["forward_name"],
         "instance_id": values["instance_id"],
         "profile": values["profile"],
         "region": values["region"],
@@ -63,8 +66,25 @@ def write_config(install_dir: str, config_data: Dict[str, str]) -> None:
     config_dir = os.path.join(install_dir, "config")
     os.makedirs(config_dir, exist_ok=True)
     config_path = os.path.join(config_dir, "config.json")
+    forwards = [
+        {
+            "name": config_data["forward_name"],
+            "instance_id": config_data["instance_id"],
+            "profile": config_data["profile"],
+            "region": config_data["region"],
+            "local_port": config_data["local_port"],
+            "remote_host": config_data["remote_host"],
+            "remote_port": config_data["remote_port"],
+        }
+    ]
+    payload = {
+        "forwards": forwards,
+        "sso_start_url": config_data["sso_start_url"],
+        "sso_login_timeout_seconds": config_data["sso_login_timeout_seconds"],
+        # デフォルトの自動更新マージン / 監視間隔は省略可
+    }
     with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(config_data, f, indent=2, ensure_ascii=False)
+        json.dump(payload, f, indent=2, ensure_ascii=False)
     log_message(f"config.json created at {config_path}")
 
 
@@ -103,13 +123,19 @@ def main():
                 continue
 
             install_dir = data.pop("install_dir")
+            forward = ForwardTarget(
+                name=data["forward_name"],
+                instance_id=data["instance_id"],
+                profile=data["profile"],
+                region=data["region"],
+                local_port=data["local_port"],
+                remote_host=data["remote_host"],
+                remote_port=data["remote_port"],
+            )
 
             # 前提条件チェック
             ok_pre, issues = check_prerequisites(
-                profile=data["profile"],
-                region=data["region"],
-                instance_id=data["instance_id"],
-                remote_host=data["remote_host"],
+                forwards=[forward],
             )
             if not ok_pre:
                 sg.popup_error("前提条件エラー:\n" + "\n".join(issues), keep_on_top=True)

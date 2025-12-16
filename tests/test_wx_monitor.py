@@ -21,22 +21,27 @@ def test_validate_settings_input():
         "tunnel_check_interval_seconds": 10,
     }
     data = {
-        "instance_id": "i-1",
-        "profile": "p",
-        "region": "r",
-        "remote_host": "host",
+        "forwards": [
+            {
+                "name": "rds",
+                "instance_id": "i-1",
+                "profile": "p",
+                "region": "r",
+                "remote_host": "host",
+                "local_port": "2222",
+                "remote_port": "5432",
+            }
+        ],
         "sso_start_url": "url",
-        "local_port": "2222",
-        "remote_port": "5432",
         "sso_login_timeout_seconds": "900",
         "sso_auto_refresh_margin_seconds": "300",
         "tunnel_check_interval_seconds": "10",
     }
     ok, errors, parsed = wx_tray.validate_settings_input(data, defaults)
     assert ok
-    assert parsed["local_port"] == 2222
+    assert parsed["forwards"][0]["local_port"] == 2222
 
-    data_bad = {"instance_id": "", "local_port": "-1"}
+    data_bad = {"forwards": [{"name": "", "local_port": "-1"}], "sso_start_url": ""}
     ok, errors, parsed = wx_tray.validate_settings_input(data_bad, defaults)
     assert not ok
     assert any("必須" in e for e in errors)
@@ -57,8 +62,17 @@ def test_monitor_starts_ssm_when_token_ok(monkeypatch):
             calls["ssm_start"] += 1
 
     app = wx_tray.WxTrayApp()
-    app.ssm = DummySsm()
-    app.config = type("C", (), {"profile": "p", "region": "r", "tunnel_check_interval_seconds": 1})()
+    fw = wx_tray.ForwardTarget(
+        name="rds",
+        instance_id="i-1",
+        profile="p",
+        region="r",
+        remote_host="h",
+        remote_port=5432,
+        local_port=15432,
+    )
+    app.forward_states = {"rds": wx_tray.ForwardRuntime(forward=fw, ssm=DummySsm())}
+    app.config = type("C", (), {"forwards": [fw], "sso_start_url": "https://start", "tunnel_check_interval_seconds": 1, "sso_auto_refresh_margin_seconds": 300})()
 
     def fake_check(*args, **kwargs):
         return True, 100
@@ -135,6 +149,14 @@ def test_wrap_text_for_prompt():
     assert any("フォールバック" in line for line in lines)
 
 
+def test_fail_auth_message_wrapped_within_width():
+    from aws_conn_tray.wx_tray import _wrap_text_for_prompt, FAIL_AUTH_URL_MESSAGE
+
+    wrapped = _wrap_text_for_prompt(FAIL_AUTH_URL_MESSAGE, width=20)
+    lines = wrapped.splitlines()
+    assert all(len(line) <= 20 for line in lines)
+
+
 def test_show_prompts_wrap_text(monkeypatch):
     from aws_conn_tray import wx_tray as wx_tray_module
     app = wx_tray.WxTrayApp.__new__(wx_tray.WxTrayApp)
@@ -166,10 +188,24 @@ def test_show_prompts_wrap_text(monkeypatch):
 
 
 def test_mini_prompt_size_constants():
-    from aws_conn_tray.wx_tray import MINI_PROMPT_SIZE
-    # 横幅は 20 文字程度に合わせてコンパクト
-    assert MINI_PROMPT_SIZE[0] <= 340
-    assert MINI_PROMPT_SIZE[1] <= 200
+    from aws_conn_tray.wx_tray import MINI_PROMPT_SIZE, MINI_PROMPT_HEIGHT
+    # 全ミニダイアログが同一サイズであることを保証
+    assert MINI_PROMPT_SIZE == (360, 320)
+    assert MINI_PROMPT_HEIGHT == 320
+
+
+def test_settings_dialog_has_min_size(monkeypatch):
+    """
+    設定ダイアログの最小サイズが 560x560 に設定されていることを確認。
+    wx が無い環境や display が無い環境ではスキップ。
+    """
+    if importlib.util.find_spec("wx") is None:
+        pytest.skip("wxPython not installed")
+    from aws_conn_tray import wx_tray
+    if not wx_tray._has_display():
+        pytest.skip("DISPLAY not available")
+    # 定数が意図した寸法かを確認
+    assert wx_tray.SETTINGS_DIALOG_MIN_SIZE == (560, 560)
 
 
 
@@ -203,6 +239,16 @@ def test_parse_authorize_url():
     assert "authorize" in url
     assert code == "1A2B-3C4D"
 
+def test_parse_authorize_url_device_flow_without_authorize():
+    # authorize を含まない device.sso... の URL でも取得できることを確認
+    text = (
+        "To continue, please use a browser to open the page "
+        "https://device.sso.ap-northeast-1.amazonaws.com/ and enter the code\nABCD-EFGH"
+    )
+    url, code = wx_tray._parse_authorize_url(text)
+    assert "device.sso" in url
+    assert code == "ABCD-EFGH"
+
 
 def test_notify_token_invalid_message(monkeypatch):
     # トークン無効時のメッセージがメニュー誘導になっているか確認
@@ -210,20 +256,27 @@ def test_notify_token_invalid_message(monkeypatch):
     monkeypatch.setattr(wx_tray, "notify", lambda t, m, on_click=None: called.update(title=t, message=m, on_click=on_click))
 
     app = wx_tray.WxTrayApp.__new__(wx_tray.WxTrayApp)  # App生成を避けるため __new__ で裸のインスタンス
+    fw = wx_tray.ForwardTarget(
+        name="rds",
+        instance_id="i-1",
+        profile="p",
+        region="r",
+        remote_host="h",
+        remote_port=5432,
+        local_port=1111,
+    )
     app.config = type(
         "C",
         (),
-            {
-                "profile": "p",
-                "region": "r",
-                "tunnel_check_interval_seconds": 1,
-                "sso_auto_refresh_margin_seconds": 300,
-                "sso_start_url": "https://example.com/start",
-                "local_port": 1111,
-            },
-        )()
-    app.tray_icon = type("T", (), {"set_icon_color": lambda self, c: None})()
-    app.ssm = None
+        {
+            "forwards": [fw],
+            "tunnel_check_interval_seconds": 1,
+            "sso_auto_refresh_margin_seconds": 300,
+            "sso_start_url": "https://example.com/start",
+        },
+    )()
+    app.forward_states = {"rds": wx_tray.ForwardRuntime(forward=fw, ssm=type("S", (), {"is_alive": lambda self: False})())}
+    app.tray_icon = type("T", (), {"set_icon_color": lambda self, c: None, "forward_statuses": {}})()
     app._refreshing = False
     app._notified_invalid = False
     called_prompt = {}
@@ -265,7 +318,7 @@ def test_open_pywebview_authorize(monkeypatch):
     assert ok is True
     cmd = created["args"]
     assert "-m" in cmd and "aws_conn_tray.qwebview_runner" in cmd
-    assert "/tmp/test-webview" in cmd
+    assert "/tmp/test-webview" in cmd  # 明示指定した storage_dir が使われる
     env = created["env"]
     assert env is not None
     # デフォルトで GPU/VA-API/Sandbox を無効化し、X11 + ソフトウェアレンダを強制する
@@ -284,8 +337,9 @@ def test_open_pywebview_authorize(monkeypatch):
 
 def _bare_app():
     app = wx_tray.WxTrayApp.__new__(wx_tray.WxTrayApp)
-    app.tray_icon = type("T", (), {"set_icon_color": lambda self, c: None})()
-    app.ssm = None
+    app.tray_icon = type("T", (), {"set_icon_color": lambda self, c: None, "forward_statuses": {}})()
+    app.forward_states = {}
+    app._primary_forward = None
     app._refreshing = False
     app._notified_invalid = False
     app._mini_prompt = None
@@ -379,9 +433,9 @@ def test_refresh_webview_fetch_fail(monkeypatch):
     monkeypatch.setattr(wx_tray.threading, "Thread", fake_thread)
     monkeypatch.setattr(wx_tray, "_fetch_authorize_url", lambda *a, **k: (None, None))
     monkeypatch.setattr(wx_tray, "start_sso_login_webview", lambda url: False)
-    def fake_prompt(url, msg, btn="開く"):
-        called.setdefault("prompt", (url, msg, btn))
-    app._show_sso_prompt = fake_prompt
+    def fake_browser_prompt(url, msg):
+        called.setdefault("prompt", (url, msg))
+    app._show_browser_prompt = fake_browser_prompt
     def fake_callafter(fn, *a, **k):
         called["callafter"] = True
         fn()
@@ -389,8 +443,209 @@ def test_refresh_webview_fetch_fail(monkeypatch):
     monkeypatch.setattr(wx_tray.wx, "GetApp", lambda: object())
 
     wx_tray.WxTrayApp._start_sso_refresh(app)
-    assert "prompt" in called  # 認可URL取得失敗で再試行ダイアログが呼ばれる
+    assert "prompt" in called  # 認可URL取得失敗でブラウザ誘導が呼ばれる
     assert called.get("callafter") is True
+    # メッセージが FAIL_AUTH_URL_MESSAGE を含むことを軽く確認
+    assert "SSO ログイン" in called["prompt"][1]
+
+
+def test_launch_webview_fetch_failure_prompts_browser(monkeypatch):
+    """
+    認可URL取得が失敗した場合、WebView再試行ではなくブラウザ誘導に切り替えることを確認。
+    """
+    app = _bare_app()
+    app._webview_running = False
+    called = {}
+    app.config = type(
+        "C",
+        (),
+        {
+            "profile": "p",
+            "region": "r",
+            "sso_start_url": "https://start.example.com",
+            "sso_login_timeout_seconds": 5,
+        },
+    )()
+    app._show_browser_prompt = lambda url, msg: called.setdefault("prompt", (url, msg))
+
+    monkeypatch.setattr(wx_tray, "_fetch_authorize_url", lambda *a, **k: (None, None))
+    monkeypatch.setattr(wx_tray, "start_sso_login_webview", lambda url: False)
+    monkeypatch.setattr(wx_tray, "log_message", lambda *a, **k: None)
+    # CallAfter は即時呼び出しに差し替え
+    monkeypatch.setattr(wx_tray.wx, "CallAfter", lambda fn, *a, **k: fn(*a, **k))
+    monkeypatch.setattr(wx_tray.wx, "GetApp", lambda: type("App", (), {"_tray_app": app})())
+
+    app._launch_webview("https://start.example.com")
+
+    assert "prompt" in called
+    assert "start.example.com" in called["prompt"][0]
+    assert "SSO ログイン" in called["prompt"][1]
+    # 代表フォワードが利用されているかの簡易検証
+    assert app._primary_forward.profile == "p"
+
+
+def test_get_primary_forward_prefers_config_forwards(monkeypatch):
+    """
+    forward_states が空でも config.forwards から代表フォワードを選べることを検証。
+    """
+    app = _bare_app()
+    fw = wx_tray.ForwardTarget(
+        name="rds",
+        instance_id="i-1",
+        profile="p1",
+        region="r1",
+        remote_host="h",
+        remote_port=5432,
+        local_port=1111,
+    )
+    app.config = type("C", (), {"forwards": [fw], "sso_start_url": "https://start"})()
+    pf = wx_tray.WxTrayApp._get_primary_forward(app)
+    assert pf.profile == "p1"
+    assert app._primary_forward is pf
+
+
+def test_fetch_authorize_url_accepts_non_authorize_url(monkeypatch):
+    """
+    aws sso login の出力が device.sso... のように authorize を含まない場合でも URL を拾えることを検証。
+    """
+    # PTY を使わないルートで動作させるために明示的に無効化
+    monkeypatch.setattr(wx_tray, "PTY_AVAILABLE", False)
+    monkeypatch.setattr(wx_tray, "log_message", lambda *a, **k: None)
+
+    class DummyProc:
+        def __init__(self):
+            self._rc = 0
+            self.returncode = 0
+        def communicate(self, timeout=None):
+            stdout = (
+                "To continue, please use a browser to open the page "
+                "https://device.sso.ap-northeast-1.amazonaws.com/ and enter the code\n"
+                "WXYZ-1234\n"
+            )
+            return (stdout, "")
+        def poll(self):
+            return self._rc
+
+    monkeypatch.setattr(wx_tray.subprocess, "Popen", lambda *a, **k: DummyProc())
+
+    url, code = wx_tray._fetch_authorize_url("p", "r", "https://start.example.com", timeout=5)
+
+    assert "device.sso" in url  # authorize を含まない URL でも拾える
+    assert code == "WXYZ-1234"
+
+
+def test_fetch_authorize_url_reads_chunked_authorize(monkeypatch):
+    """
+    PTY 経由で authorize URL が複数チャンクに分割されても検出できることを検証。
+    """
+    monkeypatch.setattr(wx_tray, "PTY_AVAILABLE", True)
+    monkeypatch.setattr(wx_tray, "log_message", lambda *a, **k: None)
+
+    # ダミーの fd を返す
+    master_fd, slave_fd = 10, 11
+    monkeypatch.setattr(wx_tray.pty, "openpty", lambda: (master_fd, slave_fd))
+
+    # 読み取りデータを 2 チャンクに分割
+    chunks = [
+        b"https://oidc.example.com/author",
+        b"ize?code=ABC\nCODE: 1A2B-3C4D\n",
+        b"",
+    ]
+    state = {"idx": 0}
+
+    def fake_select(r, _w, _e, _t):
+        # データが残っている間は ready に master_fd を返す
+        if state["idx"] < len(chunks):
+            return ([master_fd], [], [])
+        return ([], [], [])
+
+    def fake_read(fd, size):
+        if state["idx"] >= len(chunks):
+            return b""
+        data = chunks[state["idx"]]
+        state["idx"] += 1
+        return data
+
+    monkeypatch.setattr(wx_tray.select, "select", fake_select)
+    monkeypatch.setattr(wx_tray.os, "read", fake_read)
+
+    class DummyProc:
+        def poll(self):
+            # データをすべて読んだら終了扱い
+            return 0 if state["idx"] >= len(chunks) else None
+
+    monkeypatch.setattr(wx_tray.subprocess, "Popen", lambda *a, **k: DummyProc())
+    # os.close は何もしないで良い
+    monkeypatch.setattr(wx_tray.os, "close", lambda fd: None)
+
+    url, code = wx_tray._fetch_authorize_url("p", "r", "https://start.example.com", timeout=5)
+    assert "authorize" in url
+    assert code == "1A2B-3C4D"
+
+
+def test_fetch_authorize_url_no_ready_handles_gracefully(monkeypatch):
+    """
+    PTY を使うが select が空（何も読めない）場合でも例外にならず終了することを確認。
+    """
+    monkeypatch.setattr(wx_tray, "PTY_AVAILABLE", True)
+    monkeypatch.setattr(wx_tray, "log_message", lambda *a, **k: None)
+    master_fd, slave_fd = 20, 21
+    monkeypatch.setattr(wx_tray.pty, "openpty", lambda: (master_fd, slave_fd))
+
+    class DummyProc:
+        def poll(self):
+            return 0  # 即座に終了扱い
+
+    # select は空を返す
+    monkeypatch.setattr(wx_tray.select, "select", lambda r, w, e, t: ([], [], []))
+    monkeypatch.setattr(wx_tray.subprocess, "Popen", lambda *a, **k: DummyProc())
+    monkeypatch.setattr(wx_tray.os, "close", lambda fd: None)
+
+    url, code = wx_tray._fetch_authorize_url("p", "r", "https://start.example.com", timeout=5)
+    assert url is None
+
+
+def test_fetch_authorize_url_does_not_kill_process_on_success(monkeypatch):
+    """
+    URL を取得できた場合は aws sso login プロセスを kill/terminate せずに生かしておくことを確認。
+    """
+    monkeypatch.setattr(wx_tray, "PTY_AVAILABLE", True)
+    monkeypatch.setattr(wx_tray, "log_message", lambda *a, **k: None)
+    master_fd, slave_fd = 30, 31
+    monkeypatch.setattr(wx_tray.pty, "openpty", lambda: (master_fd, slave_fd))
+
+    class DummyProc:
+        def __init__(self):
+            self.killed = False
+            self.terminated = False
+            self._rc = None
+        def poll(self):
+            return self._rc
+        def terminate(self):
+            self.terminated = True
+        def kill(self):
+            self.killed = True
+
+    proc = DummyProc()
+    # select は 1 回だけ ready を返し、authorize を含む URL を渡す
+    monkeypatch.setattr(wx_tray.select, "select", lambda r, w, e, t: ([master_fd], [], []))
+    chunks = [b"https://oidc.example.com/authorize?code=AAA\n"]
+    state = {"idx": 0}
+    def fake_read(fd, size):
+        if state["idx"] >= len(chunks):
+            return b""
+        data = chunks[state["idx"]]
+        state["idx"] += 1
+        return data
+    monkeypatch.setattr(wx_tray.os, "read", fake_read)
+    monkeypatch.setattr(wx_tray.os, "close", lambda fd: None)
+    monkeypatch.setattr(wx_tray.subprocess, "Popen", lambda *a, **k: proc)
+
+    url, code = wx_tray._fetch_authorize_url("p", "r", "https://start.example.com", timeout=5)
+    assert "authorize" in url
+    # URL 取得成功時は terminate/kill されていないこと
+    assert proc.terminated is False
+    assert proc.killed is False
 
 
 @pytest.mark.skipif(os.name != "posix", reason="PTY handling is POSIX only")
@@ -443,7 +698,9 @@ def test_fetch_authorize_url_cleans_up_pty(monkeypatch):
 
     assert "authorize" in url
     assert code == "1A2B-3C4D"
-    assert called["terminate"] >= 1 or called["kill"] >= 1
+    # URL 取得成功時はプロセスを生かしたまま FD のみ閉じる
+    assert called["terminate"] == 0
+    assert called["kill"] == 0
     assert master_fd in close_calls and slave_fd in close_calls
 
 
@@ -461,28 +718,35 @@ def test_ssm_reconnect_and_icon(monkeypatch):
             self.starts += 1
             self._alive = True
 
-    app.ssm = DummySsm(alive=False)
-    app.tray_icon = type("T", (), {"set_icon_color": lambda self, c: calls["icon"].append(c)})()
+    fw = wx_tray.ForwardTarget(
+        name="rds",
+        instance_id="i-1",
+        profile="p",
+        region="r",
+        remote_host="h",
+        remote_port=5432,
+        local_port=1111,
+    )
+    app.forward_states = {"rds": wx_tray.ForwardRuntime(forward=fw, ssm=DummySsm(alive=False))}
+    app.tray_icon = type("T", (), {"set_icon_color": lambda self, c: calls["icon"].append(c), "forward_statuses": {}})()
     app.config = type(
         "C",
         (),
         {
-            "profile": "p",
-            "region": "r",
+            "forwards": [fw],
             "tunnel_check_interval_seconds": 1,
             "sso_auto_refresh_margin_seconds": 300,
             "sso_start_url": "https://example.com/start",
-            "local_port": 1111,
         },
     )()
     monkeypatch.setattr(wx_tray, "check_sso_token", lambda *a, **k: (True, 1000))
     monkeypatch.setattr(wx_tray, "is_sso_session_valid", lambda p, r: True)
     wx_tray.WxTrayApp.monitor_once(app)
-    assert app.ssm.starts == 1
+    assert app.forward_states["rds"].ssm.starts == 1
     assert "yellow" in calls["icon"] or "green" in calls["icon"]
 
     # トンネルが生きている場合は緑
-    app.ssm._alive = True
+    app.forward_states["rds"].ssm._alive = True
     calls["icon"].clear()
     wx_tray.WxTrayApp.monitor_once(app)
     assert "green" in calls["icon"]

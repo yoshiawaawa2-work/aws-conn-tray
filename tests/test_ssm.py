@@ -1,5 +1,6 @@
 import aws_conn_tray.ssm as ssm
 from aws_conn_tray.ssm import SsmPortForward
+from aws_conn_tray.config_loader import ForwardTarget
 
 
 def test_ssm_start_calls_popen(monkeypatch):
@@ -16,8 +17,17 @@ def test_ssm_start_calls_popen(monkeypatch):
         return P()
 
     monkeypatch.setattr("aws_conn_tray.ssm.subprocess.Popen", fake_popen)
-    ssm = SsmPortForward("i-123", "prof", "reg", 1111, "db.example.com", 2222)
-    ssm.start()
+    target = ForwardTarget(
+        name="rds",
+        instance_id="i-123",
+        profile="prof",
+        region="reg",
+        local_port=1111,
+        remote_host="db.example.com",
+        remote_port=2222,
+    )
+    ssm_pf = SsmPortForward(target)
+    ssm_pf.start()
     assert called["cmd"][0:3] == ["aws", "ssm", "start-session"]
     assert "AWS-StartPortForwardingSessionToRemoteHost" in called["cmd"]
 
@@ -26,11 +36,20 @@ def test_ssm_is_alive(monkeypatch):
     class P:
         def __init__(self, ret): self._ret = ret
         def poll(self): return self._ret
-    ssm = SsmPortForward("i-123", "prof", "reg", 1111, "db.example.com", 2222)
-    ssm.proc = P(None)
-    assert ssm.is_alive()
-    ssm.proc = P(0)
-    assert not ssm.is_alive()
+    target = ForwardTarget(
+        name="rds",
+        instance_id="i-123",
+        profile="prof",
+        region="reg",
+        local_port=1111,
+        remote_host="db.example.com",
+        remote_port=2222,
+    )
+    ssm_pf = SsmPortForward(target)
+    ssm_pf.proc = P(None)
+    assert ssm_pf.is_alive()
+    ssm_pf.proc = P(0)
+    assert not ssm_pf.is_alive()
 
 
 def test_cleanup_lingering_sessions_kills_found_pids(monkeypatch):
