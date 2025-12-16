@@ -30,7 +30,7 @@ LOG_PATH = os.path.join(LOG_DIR, "tray.log")
 
 
 def log_message(message: str) -> None:
-    """簡易ログを ~/.cache/aws-rds-tray/tray.log に出力する。"""
+    """簡易ログを ~/.cache/aws_conn_tray/tray.log に出力する。"""
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
         timestamp = datetime.datetime.now().isoformat()

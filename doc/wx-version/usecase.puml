@@ -5,7 +5,7 @@ actor User
 actor "AWS SSO" as SSO
 actor "AWS SSM/RDS" as SSM
 
-rectangle "aws-rds-tray (wx版)" {
+rectangle "aws-conn-tray (wx版)" {
   usecase "設定を編集する\n(⚙️設定)" as UC_Config
   usecase "SSO ログインを行う\n(WebView 認可)" as UC_SSO
   usecase "ポートフォワードを再接続" as UC_Reconnect

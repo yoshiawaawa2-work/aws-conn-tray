@@ -5,7 +5,7 @@ After=graphical-session.target
 
 [Service]
 # ★ YOUR_USERNAME を実際のユーザー名に変更してください
-ExecStart=/usr/bin/python3 /home/YOUR_USERNAME/aws_conn_tray/tray_app.py
+ExecStart=/usr/bin/python3 /home/YOUR_USERNAME/aws-conn-tray/tray_app.py
 Restart=always
 RestartSec=5
 

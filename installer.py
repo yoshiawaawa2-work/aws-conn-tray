@@ -22,8 +22,8 @@ def ensure_supported_os():
 def default_install_dir() -> str:
     if sys.platform.startswith("win"):
         drive = os.environ.get("SystemDrive", "C:")
-        return os.path.join(drive, "aws-rds-tray")
-    return os.path.expanduser("~/aws-rds-tray")
+        return os.path.join(drive, "aws-conn-tray")
+    return os.path.expanduser("~/aws-conn-tray")
 
 
 def build_layout(default_dir: str) -> list:
@@ -110,7 +110,7 @@ def main():
 
     src_root = os.path.dirname(os.path.abspath(__file__))
     layout = build_layout(default_install_dir())
-    window = sg.Window("aws-rds-tray インストーラ", layout)
+    window = sg.Window("aws-conn-tray インストーラ", layout)
 
     while True:
         event, values = window.read()

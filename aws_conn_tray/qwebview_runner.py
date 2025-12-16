@@ -67,7 +67,7 @@ def run_webview(authorize_url: str, storage_path: Optional[str] = None) -> int:
 
     sys.stderr.write(f"[qwebview] start url={authorize_url} storage={storage_path or DEFAULT_STORAGE}\n")
     app = QApplication(sys.argv)
-    profile = QWebEngineProfile("aws-rds-tray")
+    profile = QWebEngineProfile("aws-conn-tray")
     storage_dir = storage_path or DEFAULT_STORAGE
     try:
         os.makedirs(storage_dir, exist_ok=True)
