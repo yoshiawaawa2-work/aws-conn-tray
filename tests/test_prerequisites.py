@@ -1,3 +1,6 @@
+import sys
+import types
+
 from aws_conn_tray import prerequisites
 from aws_conn_tray.config_loader import ForwardTarget
 
@@ -22,6 +25,8 @@ def test_check_prerequisites_ok(monkeypatch):
         lambda cmd, timeout=5: (0, "aws-cli/2.0.0", ""),
     )
     monkeypatch.setattr(prerequisites, "check_profile_config", lambda profile: [])
+    monkeypatch.setattr(prerequisites.importlib.util, "find_spec", lambda name: True)
+    monkeypatch.setitem(sys.modules, "psutil", types.SimpleNamespace())
 
     ok, issues = prerequisites.check_prerequisites([_fw()])
     assert ok
@@ -106,6 +111,8 @@ def test_check_prerequisites_warns_when_awscli_not_v2(monkeypatch):
 
 def test_check_prerequisites_skip_ssm(monkeypatch):
     monkeypatch.setattr(prerequisites, "shutil", type("S", (), {"which": lambda _: "/usr/bin/aws"}))
+    monkeypatch.setattr(prerequisites.importlib.util, "find_spec", lambda name: True)
+    monkeypatch.setitem(sys.modules, "psutil", types.SimpleNamespace())
 
     # SSM コマンドは実行されない前提で必ず失敗を返す
     def fake_run(cmd, timeout=5):
@@ -120,3 +127,17 @@ def test_check_prerequisites_skip_ssm(monkeypatch):
 
     assert ok is True
     assert issues == []
+
+
+def test_check_prerequisites_requires_psutil(monkeypatch):
+    # psutil が無いと判定された場合にエラーが返ることを確認
+    monkeypatch.setattr(prerequisites.importlib.util, "find_spec", lambda name: None if name == "psutil" else True)
+    monkeypatch.delitem(sys.modules, "psutil", raising=False)
+    monkeypatch.setattr(prerequisites, "shutil", type("S", (), {"which": lambda _: "/usr/bin/aws"}))
+    monkeypatch.setattr(prerequisites, "_run_command", lambda *a, **k: (0, "aws-cli/2.0.0", ""))
+    monkeypatch.setattr(prerequisites, "check_profile_config", lambda profile: [])
+
+    ok, issues = prerequisites.check_prerequisites([_fw()], require_ssm=False)
+
+    assert ok is False
+    assert any("psutil" in msg for msg in issues)

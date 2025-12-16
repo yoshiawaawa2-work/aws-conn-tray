@@ -2,6 +2,8 @@ import configparser
 import os
 import shutil
 import subprocess
+import importlib
+import importlib.util
 from typing import List, Tuple
 
 from .config_loader import ForwardTarget
@@ -50,6 +52,8 @@ def check_prerequisites(
     複数フォワード設定を前提に、共通前提条件 + 各フォワードごとの SSM 到達性を確認する。
     """
     issues: List[str] = []
+
+    issues.extend(_ensure_psutil_available())
 
     aws_path = shutil.which("aws")
     if not aws_path:
@@ -116,3 +120,13 @@ def ensure_supported_os():
     if not platforms.is_supported_os():
         notify("非対応OS", "このアプリは Linux / Windows / macOS に対応しています。")
         raise SystemExit(1)
+
+
+def _ensure_psutil_available() -> List[str]:
+    try:
+        if importlib.util.find_spec("psutil") is None:
+            return ["psutil が見つかりません。`pip install psutil` を実行してください。"]
+        import psutil  # noqa: F401
+    except Exception as e:
+        return [f"psutil を読み込めません: {e}"]
+    return []
