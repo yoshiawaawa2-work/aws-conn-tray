@@ -169,7 +169,7 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
         try:
             path = os.path.join(ICON_DIR, f"{color}.png")
             icon = wx.Icon(path, wx.BITMAP_TYPE_PNG)
-            self.SetIcon(icon, "aws-rds-tray")
+            self.SetIcon(icon, "aws-conn-tray")
         except Exception as e:
             log_message(f"[wx] icon set failed: {e}")
 

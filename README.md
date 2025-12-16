@@ -1,174 +1,103 @@
 
 # aws_conn_tray
 
-AWS SSO トークンと SSM ポートフォワード（RDS 用）を監視する Ubuntu 用トレイ常駐アプリ一式です。GUI は wxPython ベースのみです。
+AWS SSO トークンと SSM ポートフォワード（RDS など）を監視し、トレイアイコンと通知で状態を知らせるデスクトップ常駐アプリです。GUI は wxPython 版のみで、認証画面表示は PySide6 + QtWebEngine のサブプロセスを利用します。
 
-## 機能概要
+## 主な機能
+- トレイアイコン表示（wxPython）。左右クリックでメニューを開く。
+- SSO トークン期限の監視（`~/.aws/sso/cache/*.json`）。期限切れ前後で通知・ミニダイアログ表示。
+- SSO ログインフローの起動  
+  - Qt WebView を最小化で開く（失敗時はブラウザにフォールバック）。  
+  - デバイスコード入力画面を開き、`127.0.0.1/.../oauth/callback` を検知したら自動クローズ。
+- SSM ポートフォワード (`AWS-StartPortForwardingSessionToRemoteHost`) の起動・監視・自動再接続。
+- アイコン色で状態を表示  
+  - 緑: トークン有効 & ポートフォワード有効  
+  - 黄: トークン有効だが再接続中  
+  - 赤: トークン無効（再ログインが必要）
+- 設定ダイアログ（wx）で `config/config.json` を編集・バリデート可能。
+- ログを `~/.cache/aws_conn_tray/tray.log` に出力。
 
-- Ubuntu のパネル右上（タスクトレイ）に常駐アイコンを表示（wxPython）
-- `~/.aws/sso/cache/*.json` から SSO トークンの期限を監視
-- トークン期限が 5 分前 / 1 分前 / 期限切れ のタイミングで通知
-- SSO ログインページをブラウザで開くメニュー
-- AWS SSM のポートフォワード (`AWS-StartPortForwardingSession`) を起動・監視
-- ポートフォワードが切れている場合は自動で再接続を試行
-- アイコン色で状態を表示
-  - 緑: トークン有効 & ポートフォワード有効
-  - 黄: トークン有効だがポートフォワード切れ（再接続中）
-  - 赤: トークン無効（SSO 再ログインが必要）
+## ディレクトリ概要
+- `tray_app.py` : アプリのエントリポイント。wx アプリを起動。
+- `aws_conn_tray/` : 実装本体（SSO/SSM 監視、WebView、GUI）。
+- `config/config.example.json` : 設定サンプル。`config/config.json` をここから作る。
+- `systemd/aws-conn-tray.service` : systemd --user 用サービス定義。
+- `icons/*.png` : トレイアイコン。
+- `tests/` : 単体テスト（wx/Qt 依存テストは環境により skip）。
 
-## ディレクトリ構成
-
-- `tray_app.py`  
-  トレイ常駐アプリ本体（Python3）。wxPython 版のみ。
-
-- `config.example.json`  
-  設定ファイルのサンプル。`config/config.json` にコピーして使用します。
-
-- `systemd/aws-conn-tray.service`  
-  systemd --user 用のサービス定義ファイル。自動起動設定用。
-
-- `icons/green.png`  
-  正常状態（トークン & ポートフォワード OK）時のアイコン。
-
-- `icons/yellow.png`  
-  トンネル再接続中などの状態のアイコン。
-
-- `icons/red.png`  
-  トークン切れなど異常状態のアイコン。
-
-## 事前条件
-
-- Ubuntu 22.x（GNOME）想定
-- AWS CLI v2 がインストール済み
-- AWS SSO (IAM Identity Center) 設定済み (`aws configure sso` 済)
-- 踏み台 EC2 が SSM で接続可能であること
-- RDS (PostgreSQL) が踏み台から 5432/TCP で到達可能であること
-- Python3
-- wxPython, PySide6（`requirements.txt` を参照）
+## 前提条件
+- Ubuntu 22.x (GNOME) 想定。macOS/Windows でも wx/PySide が動けば利用可。
+- Python 3.10+ 推奨。
+- AWS CLI v2 / Session Manager Plugin がインストール済み。`aws configure sso` を完了していること。
+- 踏み台 EC2 が SSM で到達可能で、そこから対象 DB へ TCP で接続できること。
 
 ## セットアップ手順
 
-### 1. このフォルダをホームディレクトリに配置
-
-例:
-
+### 1. 依存パッケージのインストール
 ```bash
-mv aws_conn_tray ~/aws_conn_tray
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+```
+開発用ツールを入れる場合は `make install-dev` で `pytest/black` なども導入できます。
+
+### 2. フォルダ配置
+リポジトリをホーム配下に置く例:
+```bash
+mv aws-conn-tray ~/aws-conn-tray
+cd ~/aws-conn-tray
 ```
 
-### 2. 設定ファイルを配置
-
-`config/config.example.json` を同階層の `config/config.json` にコピーして編集します（アプリはリポジトリ内の `config/config.json` を参照します）。
-
+### 3. 設定ファイル作成
 ```bash
-cp ~/aws_conn_tray/config/config.example.json ~/aws_conn_tray/config/config.json
-nano ~/aws_conn_tray/config/config.json
+cp config/config.example.json config/config.json
 ```
+主な項目（複数フォワードを `forwards` 配列で持てます）:
+- `name` : 表示用ラベル。
+- `instance_id` : 踏み台 EC2 のインスタンス ID。
+- `profile` / `region` : AWS CLI のプロファイル名・リージョン。
+- `local_port` : ローカルで待ち受けるポート。
+- `remote_host` / `remote_port` : 接続先ホスト・ポート（例: RDS のホスト/5432）。
+- `sso_start_url` : IAM Identity Center の start URL。  
+- `sso_login_timeout_seconds` : `aws sso login --no-browser` の待ち時間。
+- `sso_auto_refresh_margin_seconds` : 期限がこの秒数以内に迫ったら自動再ログインを試行。
+- `tunnel_check_interval_seconds` : トークン/トンネルの監視間隔。
 
-編集ポイント:
+### 4. 起動（手動）
+```bash
+PYTHONPATH=. .venv/bin/python tray_app.py
+```
+トレイにアイコンが出て、右クリックでメニューが開けば OK。
 
-- `instance_id`  
-  踏み台 EC2（bastion）のインスタンス ID (`i-xxxxxxxxxxxxx`) を指定
-
-- `profile`  
-  SSO 用の AWS CLI プロファイル名（例: `PS-Admin-abc`）。
-
-- `region`  
-  例: `"ap-northeast-1"`。
-
-- `local_port`  
-  ローカル側で開けるポート番号。例: `15432`。
-
-- `remote_port`  
-  RDS PostgreSQL のポート番号（通常 `5432`）。
-
-- `sso_start_url`  
-  IAM Identity Center (SSO) の "AWS access portal URL"。  
-  例: `"https://d-XXXXXXXXXX.awsapps.com/start"`。
-
-### 3. systemd --user サービスを設定
-
-サービス定義ファイルをユーザーの systemd ディレクトリにコピーします。
-
+### 5. 自動起動（systemd --user）
 ```bash
 mkdir -p ~/.config/systemd/user
-cp ~/aws-rds-tray/systemd/aws-rds-tray.service ~/.config/systemd/user/
-```
-
-`aws-rds-tray.service` 内の `YOUR_USERNAME` をあなたのユーザー名に置き換えます。
-
-```bash
-nano ~/.config/systemd/user/aws-rds-tray.service
-# ExecStart の /home/YOUR_USERNAME を /home/あなたのユーザー名 に修正
-```
-
-その後、systemd に読み込ませて有効化します。
-
-```bash
+cp systemd/aws-conn-tray.service ~/.config/systemd/user/
+sed -i "s|/home/YOUR_USERNAME|$HOME|g" ~/.config/systemd/user/aws-conn-tray.service
 systemctl --user daemon-reload
-systemctl --user enable --now aws-rds-tray.service
+systemctl --user enable --now aws-conn-tray.service
 ```
-
-これで、ユーザーログイン時に自動でトレイアプリが起動します。
-
-### 4. 初期動作確認
-
-1. すでに `aws sso login --profile <profile>` が成功していることを確認します。
-2. パネル右上に小さなアイコン（赤 or 黄 or 緑）が表示されていることを確認します。
-3. アイコンを右クリックしてメニューを開きます。
-   - 「SSO ログインページを開く」
-   - 「ポートフォワード再接続」
-   - 「終了」
-   が表示されていれば OK です。
-
-### 5. 状態の意味
-
-- アイコンが **緑** の時  
-  - SSO トークンは有効
-  - SSM ポートフォワードも有効
-
-- アイコンが **黄** の時  
-  - SSO トークンは有効
-  - ただしポートフォワードが落ちており、自動再接続を試行中
-
-- アイコンが **赤** の時  
-  - SSO トークンが無効（期限切れ or 見つからない）
-  - `aws sso login --profile <profile>` を実行して再ログインしてください。
-  - あるいはメニューの「SSO ログインページを開く」からブラウザでログインページを開いてもよいです。
-
-### 6. ポートフォワードの実際の動作
-
-このアプリは内部で以下のコマンドを実行します。
-
+停止・無効化:
 ```bash
-aws ssm start-session \
-  --target <踏み台EC2のインスタンスID> \
-  --document-name AWS-StartPortForwardingSession \
-  --parameters portNumber=<remote_port>,localPortNumber=<local_port> \
-  --profile <profile> \
-  --region <region>
+systemctl --user disable --now aws-conn-tray.service
 ```
 
-そのため、踏み台 EC2 から RDS へ 5432/TCP が通っている必要があります。
-
-### 7. アンインストール / 無効化
-
-自動起動を止めるには：
-
+### 6. アンインストール
 ```bash
-systemctl --user disable --now aws-rds-tray.service
+systemctl --user disable --now aws-conn-tray.service
+rm -rf ~/aws-conn-tray ~/.cache/aws_conn_tray
+rm ~/.config/systemd/user/aws-conn-tray.service
 ```
 
-フォルダごと削除する場合：
+## 動作のポイント
+- SSO トークン失効時は右下にミニダイアログが出て「開く」から WebView/ブラウザで再ログインできます。
+- トンネルが切れた場合は自動再接続を試行し、ローカルポート衝突が続くと通知で中止を案内します。
+- ログは `~/.cache/aws_conn_tray/tray.log`。Qt WebView のストレージは `~/.cache/aws_conn_tray/qt-webview`。
 
-```bash
-rm -rf ~/aws-rds-tray
-rm -rf ~/.config/aws-rds-tray
-rm ~/.config/systemd/user/aws-rds-tray.service
-```
+## テスト
+- 単体テスト（モック中心）: `make test`
+- wx GUI を実際に回す場合: `make test-gui`（`WX_GUI_TEST=1` と DISPLAY が必要）
 
-## 注意事項
-
-- このツールは「簡易的な監視と再接続」を目的としたサンプル実装です。
-- 本番運用に導入する前に、検証環境でのテストを推奨します。
-- SSO トークンの生成・更新は AWS の仕様変更などにより挙動が変わる可能性があります。
+## 既知の注意
+- 環境依存で QtWebEngine が GPU/VA-API で落ちるため、ソフトウェア描画を強制する起動フラグを付与しています。
+- 本番運用前に、SSO 設定・踏み台経路・ポート衝突などを検証環境で確認してください。
