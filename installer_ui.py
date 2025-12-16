@@ -1,18 +1,49 @@
 """
-Tkinter ベースの簡易インストーラ UI。
-- --preview / --headless オプションで、実処理なしの確認や CLI 実行が可能。
+Tkinter ベースのウィザード形式インストーラ。
+- ステップ: ようこそ/前提確認 → インストール先/自動起動 → 設定編集 → 確認 → 進捗 → 完了
+- --preview で確認のみ、--headless で GUI 無し実行が可能。
 """
 
 from __future__ import annotations
 
 import argparse
+import threading
 import sys
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from aws_conn_tray import installer_core
+from aws_conn_tray import wx_tray
+
+
+# ===== ヘルパー =====
+
+
+def build_config_data(forwards: List[Dict[str, str]], globals_raw: Dict[str, str]) -> Dict[str, Any]:
+    """
+    Tk の入力値から config.json 相当の dict を生成する。
+    wx_tray.validate_settings_input を利用してバリデーションする。
+    """
+    data = {
+        "forwards": forwards,
+        "sso_start_url": globals_raw.get("sso_start_url", ""),
+        "sso_login_timeout_seconds": globals_raw.get("sso_login_timeout_seconds", ""),
+        "sso_auto_refresh_margin_seconds": globals_raw.get("sso_auto_refresh_margin_seconds", ""),
+        "tunnel_check_interval_seconds": globals_raw.get("tunnel_check_interval_seconds", ""),
+    }
+    defaults = {
+        "local_port": 15432,
+        "remote_port": 5432,
+        "sso_login_timeout_seconds": 900,
+        "sso_auto_refresh_margin_seconds": 300,
+        "tunnel_check_interval_seconds": 10,
+    }
+    ok, errors, parsed = wx_tray.validate_settings_input(data, defaults)
+    if not ok:
+        raise ValueError("\n".join(errors))
+    return parsed
 
 
 def _parse_args():
@@ -26,13 +57,17 @@ def _parse_args():
     return p.parse_args()
 
 
-def perform(opts, preview: bool) -> installer_core.InstallResult:
+# ===== Headless 実行 =====
+
+
+def perform(opts, preview: bool, config_data=None) -> installer_core.InstallResult:
     cfg_path: Optional[Path] = Path(opts.config) if opts.config else None
     install_dir = Path(opts.install_dir) if opts.install_dir else installer_core.default_paths()["install"]
     install_opts = installer_core.InstallOptions(
         install_dir=install_dir,
         config_source=cfg_path,
-        use_example_config=cfg_path is None,
+        use_example_config=cfg_path is None and config_data is None,
+        config_data=config_data,
         autostart=not opts.no_autostart,
         auto_install_missing=opts.auto_install_missing,
         preview=preview,
@@ -41,7 +76,7 @@ def perform(opts, preview: bool) -> installer_core.InstallResult:
 
 
 def run_headless(args):
-    res = perform(args, preview=args.preview)
+    res = perform(args, preview=args.preview, config_data=None)
     if res.ok:
         print("プレビュー完了" if args.preview else "インストール完了")
     else:
@@ -51,76 +86,273 @@ def run_headless(args):
     return 0 if res.ok else 1
 
 
-def run_gui(args):
-    defaults = installer_core.default_paths()
-    root = tk.Tk()
-    root.title("aws-conn-tray インストーラ")
+# ===== ウィザード UI =====
 
-    install_var = tk.StringVar(value=str(defaults["install"]))
-    autostart_var = tk.BooleanVar(value=True)
-    autostart_only_var = tk.BooleanVar(value=False)
-    auto_install_missing_var = tk.BooleanVar(value=False)
-    cfg_mode_var = tk.StringVar(value="sample")
-    cfg_path_var = tk.StringVar(value="")
 
-    tk.Label(root, text="インストール先").grid(row=0, column=0, sticky="w", padx=5, pady=5)
-    tk.Entry(root, textvariable=install_var, width=50).grid(row=0, column=1, padx=5, pady=5)
-    tk.Button(root, text="参照", command=lambda: install_var.set(filedialog.askdirectory() or install_var.get())).grid(row=0, column=2, padx=5, pady=5)
+class InstallerWizard:
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.root.title("aws-conn-tray インストーラ")
+        self.state: Dict[str, Any] = {
+            "install_dir": str(installer_core.default_paths()["install"]),
+            "autostart": True,
+            "auto_install_missing": False,
+            "forwards": [
+                {
+                    "name": "rds",
+                    "instance_id": "",
+                    "profile": "",
+                    "region": "",
+                    "remote_host": "",
+                    "remote_port": "5432",
+                    "local_port": "15432",
+                }
+            ],
+            "globals": {
+                "sso_start_url": "",
+                "sso_login_timeout_seconds": "900",
+                "sso_auto_refresh_margin_seconds": "300",
+                "tunnel_check_interval_seconds": "10",
+            },
+        }
+        self.frames: List[tk.Frame] = []
+        self.current_step = 0
+        self.progress_var = tk.DoubleVar(value=0)
+        self.log_widget: Optional[tk.Text] = None
+        self.result: Optional[installer_core.InstallResult] = None
+        self._build_steps()
+        self._show_step(0)
 
-    tk.Checkbutton(root, text="ログイン時に自動起動を登録する", variable=autostart_var).grid(row=1, column=0, columnspan=3, sticky="w", padx=5)
-    tk.Checkbutton(root, text="自動起動登録のみを実行", variable=autostart_only_var).grid(row=2, column=0, columnspan=3, sticky="w", padx=5)
+    # --- UI ビルド ---
+    def _build_steps(self):
+        self.frames = [
+            self._build_welcome(),
+            self._build_path_autostart(),
+            self._build_config_editor(),
+            self._build_confirm(),
+            self._build_progress(),
+            self._build_done(),
+        ]
 
-    frame_cfg = tk.LabelFrame(root, text="設定ファイル")
-    frame_cfg.grid(row=3, column=0, columnspan=3, sticky="we", padx=5, pady=5)
-    tk.Radiobutton(frame_cfg, text="サンプルから生成", variable=cfg_mode_var, value="sample").grid(row=0, column=0, sticky="w")
-    tk.Radiobutton(frame_cfg, text="既存 config.json を指定", variable=cfg_mode_var, value="import").grid(row=1, column=0, sticky="w")
-    tk.Entry(frame_cfg, textvariable=cfg_path_var, width=45).grid(row=1, column=1, padx=5, pady=3)
-    tk.Button(frame_cfg, text="参照", command=lambda: cfg_path_var.set(filedialog.askopenfilename(filetypes=[("JSON", "*.json")]) or cfg_path_var.get())).grid(row=1, column=2, padx=5)
+    def _build_welcome(self) -> tk.Frame:
+        frame = tk.Frame(self.root)
+        tk.Label(frame, text="ようこそ", font=("Arial", 14, "bold")).pack(anchor="w", padx=10, pady=5)
+        self.precheck_text = tk.Text(frame, height=8, width=70, state="disabled")
+        self.precheck_text.pack(padx=10, pady=5)
+        tk.Checkbutton(frame, text="前提不足時に推奨コマンドを自動実行（自己責任）", variable=tk.BooleanVar(value=self.state["auto_install_missing"]), command=lambda: self.state.__setitem__("auto_install_missing", not not self.state.get("auto_install_missing"))).pack(anchor="w", padx=10)
+        tk.Button(frame, text="再チェック", command=self._run_precheck).pack(anchor="e", padx=10, pady=5)
+        self._run_precheck()
+        return frame
 
-    tk.Checkbutton(root, text="前提不足時に推奨コマンドを自動実行（自己責任）", variable=auto_install_missing_var).grid(row=4, column=0, columnspan=3, sticky="w", padx=5)
-
-    log_text = tk.Text(root, height=10, width=70, state="disabled")
-    log_text.grid(row=6, column=0, columnspan=3, padx=5, pady=5)
-
-    def append_log(msg: str):
-        log_text.configure(state="normal")
-        log_text.insert("end", msg + "\n")
-        log_text.see("end")
-        log_text.configure(state="disabled")
-
-    def do_install(preview: bool):
-        cfg_path = cfg_path_var.get() if cfg_mode_var.get() == "import" else None
-        opts = argparse.Namespace(
-            install_dir=install_var.get(),
-            config=cfg_path,
-            no_autostart=not autostart_var.get(),
-            auto_install_missing=auto_install_missing_var.get(),
-        )
-        if autostart_only_var.get():
-            cmds = installer_core.enable_autostart(Path(install_var.get()), dry_run=preview)
-            msg = "自動起動登録のみ実行しました。" if not preview else "自動起動登録コマンド（プレビュー）: " + " | ".join(" ".join(c) for c in cmds)
-            messagebox.showinfo("完了", msg)
-            append_log(msg)
-            return
-        res = perform(opts, preview=preview)
+    def _run_precheck(self):
+        res = installer_core.preinstall_check()
+        self.state["precheck_ok"] = res.ok
+        self.state["precheck_issues"] = res.issues
+        self.precheck_text.configure(state="normal")
+        self.precheck_text.delete("1.0", "end")
         if res.ok:
-            msg = "プレビュー完了" if preview else "インストールが完了しました。"
-            messagebox.showinfo("完了", msg)
-            append_log(msg)
+            self.precheck_text.insert("end", "前提条件は満たされています。\n")
         else:
-            messagebox.showerror("エラー", "\n".join(res.issues))
-            append_log("\n".join(res.issues))
+            self.precheck_text.insert("end", "不足している前提条件:\n")
+            for i in res.issues:
+                self.precheck_text.insert("end", f"- {i}\n")
+            if res.suggested_installs:
+                self.precheck_text.insert("end", "\n推奨インストールコマンド例:\n")
+                for cmd in res.suggested_installs:
+                    self.precheck_text.insert("end", " ".join(cmd) + "\n")
+        self.precheck_text.configure(state="disabled")
 
-    def do_disable(preview: bool):
-        cmds = installer_core.disable_autostart(dry_run=preview)
-        msg = "自動起動解除を実行しました。" if not preview else "自動起動解除コマンド（プレビュー）: " + " | ".join(" ".join(c) for c in cmds)
-        messagebox.showinfo("完了", msg)
-        append_log(msg)
+    def _build_path_autostart(self) -> tk.Frame:
+        frame = tk.Frame(self.root)
+        tk.Label(frame, text="インストール先", font=("Arial", 12, "bold")).grid(row=0, column=0, sticky="w", padx=5, pady=5, columnspan=2)
+        self.install_var = tk.StringVar(value=self.state["install_dir"])
+        tk.Entry(frame, textvariable=self.install_var, width=50).grid(row=1, column=0, padx=5, pady=5)
+        tk.Button(frame, text="参照", command=self._choose_install_dir).grid(row=1, column=1, padx=5, pady=5)
+        self.autostart_var = tk.BooleanVar(value=self.state["autostart"])
+        tk.Checkbutton(frame, text="ログイン時に自動起動を登録する", variable=self.autostart_var).grid(row=2, column=0, columnspan=2, sticky="w", padx=5)
+        return frame
 
-    tk.Button(root, text="インストール", command=lambda: do_install(preview=False)).grid(row=5, column=0, padx=5, pady=5, sticky="we")
-    tk.Button(root, text="プレビュー", command=lambda: do_install(preview=True)).grid(row=5, column=1, padx=5, pady=5, sticky="we")
-    tk.Button(root, text="自動起動解除", command=lambda: do_disable(preview=False)).grid(row=5, column=2, padx=5, pady=5, sticky="we")
+    def _choose_install_dir(self):
+        path = filedialog.askdirectory()
+        if path:
+            self.install_var.set(path)
 
+    def _build_config_editor(self) -> tk.Frame:
+        frame = tk.Frame(self.root)
+        tk.Label(frame, text="設定編集", font=("Arial", 12, "bold")).pack(anchor="w", padx=5, pady=5)
+        self.forward_frames: List[Dict[str, tk.StringVar]] = []
+        self.forwards_container = tk.Frame(frame)
+        self.forwards_container.pack(fill="both", expand=True, padx=5)
+        tk.Button(frame, text="フォワード追加", command=self._add_forward).pack(anchor="w", padx=5, pady=5)
+
+        globals_frame = tk.LabelFrame(frame, text="グローバル設定")
+        globals_frame.pack(fill="x", padx=5, pady=5)
+        self.global_vars: Dict[str, tk.StringVar] = {
+            "sso_start_url": tk.StringVar(value=self.state["globals"]["sso_start_url"]),
+            "sso_login_timeout_seconds": tk.StringVar(value=self.state["globals"]["sso_login_timeout_seconds"]),
+            "sso_auto_refresh_margin_seconds": tk.StringVar(value=self.state["globals"]["sso_auto_refresh_margin_seconds"]),
+            "tunnel_check_interval_seconds": tk.StringVar(value=self.state["globals"]["tunnel_check_interval_seconds"]),
+        }
+        row = 0
+        for key, label in [
+            ("sso_start_url", "SSO Start URL"),
+            ("sso_login_timeout_seconds", "SSO ログインタイムアウト(秒)"),
+            ("sso_auto_refresh_margin_seconds", "自動更新マージン(秒)"),
+            ("tunnel_check_interval_seconds", "監視間隔(秒)"),
+        ]:
+            tk.Label(globals_frame, text=label).grid(row=row, column=0, sticky="w", padx=5, pady=2)
+            tk.Entry(globals_frame, textvariable=self.global_vars[key], width=40).grid(row=row, column=1, padx=5, pady=2)
+            row += 1
+
+        for fw in self.state["forwards"]:
+            self._add_forward(initial=fw)
+
+        return frame
+
+    def _add_forward(self, initial: Optional[Dict[str, str]] = None):
+        initial = initial or {
+            "name": f"forward-{len(self.forward_frames)+1}",
+            "instance_id": "",
+            "profile": "",
+            "region": "",
+            "remote_host": "",
+            "remote_port": "5432",
+            "local_port": "15432",
+        }
+        container = tk.Frame(self.forwards_container, relief="groove", borderwidth=1)
+        container.pack(fill="x", padx=5, pady=5)
+        vars_map = {k: tk.StringVar(value=str(initial.get(k, ""))) for k in initial}
+        labels = [
+            ("name", "名前"),
+            ("instance_id", "インスタンスID"),
+            ("profile", "プロファイル"),
+            ("region", "リージョン"),
+            ("remote_host", "リモートホスト"),
+            ("remote_port", "リモートポート"),
+            ("local_port", "ローカルポート"),
+        ]
+        for idx, (key, label) in enumerate(labels):
+            tk.Label(container, text=label).grid(row=idx, column=0, sticky="w", padx=5, pady=2)
+            tk.Entry(container, textvariable=vars_map[key], width=40).grid(row=idx, column=1, padx=5, pady=2)
+        tk.Button(container, text="削除", command=lambda c=container, v=vars_map: self._remove_forward(c, v)).grid(row=0, column=2, padx=5, pady=2)
+        self.forward_frames.append(vars_map)
+
+    def _remove_forward(self, frame: tk.Frame, vars_map: Dict[str, tk.StringVar]):
+        if len(self.forward_frames) <= 1:
+            messagebox.showwarning("警告", "フォワードは最低1件必要です。")
+            return
+        frame.destroy()
+        self.forward_frames = [v for v in self.forward_frames if v is not vars_map]
+
+    def _build_confirm(self) -> tk.Frame:
+        frame = tk.Frame(self.root)
+        tk.Label(frame, text="確認", font=("Arial", 12, "bold")).pack(anchor="w", padx=5, pady=5)
+        self.confirm_text = tk.Text(frame, height=15, width=70, state="disabled")
+        self.confirm_text.pack(padx=5, pady=5)
+        return frame
+
+    def _update_confirm(self):
+        self.confirm_text.configure(state="normal")
+        self.confirm_text.delete("1.0", "end")
+        self.confirm_text.insert("end", f"インストール先: {self.state['install_dir']}\n")
+        self.confirm_text.insert("end", f"自動起動: {'有効' if self.state['autostart'] else '無効'}\n")
+        self.confirm_text.insert("end", "フォワード設定:\n")
+        for fw in self.state["forwards"]:
+            self.confirm_text.insert("end", f"- {fw['name']}: {fw['local_port']} -> {fw['remote_host']}:{fw['remote_port']} ({fw['profile']}/{fw['region']})\n")
+        self.confirm_text.insert("end", "グローバル設定:\n")
+        for k, v in self.state["globals"].items():
+            self.confirm_text.insert("end", f"  {k}: {v}\n")
+        self.confirm_text.configure(state="disabled")
+
+    def _build_progress(self) -> tk.Frame:
+        frame = tk.Frame(self.root)
+        tk.Label(frame, text="インストール中...", font=("Arial", 12, "bold")).pack(anchor="w", padx=5, pady=5)
+        self.progressbar = ttk.Progressbar(frame, mode="indeterminate", variable=self.progress_var)
+        self.progressbar.pack(fill="x", padx=5, pady=5)
+        self.progress_log = tk.Text(frame, height=10, width=70, state="disabled")
+        self.progress_log.pack(padx=5, pady=5)
+        return frame
+
+    def _log_progress(self, msg: str):
+        self.progress_log.configure(state="normal")
+        self.progress_log.insert("end", msg + "\n")
+        self.progress_log.see("end")
+        self.progress_log.configure(state="disabled")
+
+    def _build_done(self) -> tk.Frame:
+        frame = tk.Frame(self.root)
+        self.done_label = tk.Label(frame, text="", font=("Arial", 12, "bold"))
+        self.done_label.pack(anchor="w", padx=5, pady=5)
+        tk.Button(frame, text="完了", command=self.root.destroy).pack(pady=10)
+        return frame
+
+    # --- ナビゲーション ---
+    def _show_step(self, idx: int):
+        if idx < 0 or idx >= len(self.frames):
+            return
+        if hasattr(self, "current_frame"):
+            self.current_frame.pack_forget()
+        self.current_step = idx
+        self.current_frame = self.frames[idx]
+        self.current_frame.pack(fill="both", expand=True)
+
+    def next_step(self):
+        if self.current_step == 1:  # 保存
+            self.state["install_dir"] = self.install_var.get()
+            self.state["autostart"] = self.autostart_var.get()
+        if self.current_step == 2:  # 設定保存
+            forwards = []
+            for vars_map in self.forward_frames:
+                forwards.append({k: v.get() for k, v in vars_map.items()})
+            self.state["forwards"] = forwards
+            for k, var in self.global_vars.items():
+                self.state["globals"][k] = var.get()
+        if self.current_step == 3:
+            self._update_confirm()
+        if self.current_step == len(self.frames) - 3:
+            self._start_install()
+        self._show_step(min(self.current_step + 1, len(self.frames) - 1))
+
+    def prev_step(self):
+        self._show_step(max(self.current_step - 1, 0))
+
+    # --- インストール処理 ---
+    def _start_install(self):
+        self.progressbar.start(10)
+        self.progress_var.set(0)
+        self._log_progress("インストール開始...")
+
+        def worker():
+            try:
+                cfg_data = build_config_data(self.state["forwards"], self.state["globals"])
+            except Exception as e:
+                self._log_progress(f"設定エラー: {e}")
+                messagebox.showerror("設定エラー", str(e))
+                self._show_step(2)
+                return
+            opts = argparse.Namespace(
+                install_dir=self.state["install_dir"],
+                config=None,
+                no_autostart=not self.state["autostart"],
+                auto_install_missing=self.state.get("auto_install_missing", False),
+            )
+            res = perform(opts, preview=False, config_data=cfg_data)
+            self.result = res
+            self._log_progress("インストール完了" if res.ok else "インストール失敗")
+            self.done_label.config(text="完了しました" if res.ok else "エラーが発生しました")
+            self.progressbar.stop()
+            self._show_step(len(self.frames) - 1)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+
+def run_gui(args):
+    root = tk.Tk()
+    wizard = InstallerWizard(root)
+    nav = tk.Frame(root)
+    nav.pack(fill="x")
+    tk.Button(nav, text="戻る", command=wizard.prev_step).pack(side="left", padx=5, pady=5)
+    tk.Button(nav, text="次へ", command=wizard.next_step).pack(side="right", padx=5, pady=5)
     root.mainloop()
 
 

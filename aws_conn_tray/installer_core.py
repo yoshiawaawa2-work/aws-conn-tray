@@ -12,7 +12,7 @@ import sys
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Any
 
 from . import platforms
 from .paths import APP_ROOT, CONFIG_EXAMPLE_PATH
@@ -108,16 +108,21 @@ def default_paths() -> Dict[str, Path]:
 # ===== 設定ファイル操作 =====
 
 
-def prepare_config(target_dir: Path, source_config: Optional[Path] = None) -> Path:
+def prepare_config(target_dir: Path, source_config: Optional[Path] = None, data: Optional[Dict[str, Any]] = None) -> Path:
     """
     config/config.json を target_dir に作成する。
     - source_config が指定されていればコピー
     - それ以外は example からコピー
+    - data が与えられれば JSON として書き込む
     """
     cfg_dir = target_dir / "config"
     cfg_dir.mkdir(parents=True, exist_ok=True)
     dst = cfg_dir / "config.json"
-    if source_config:
+    if data is not None:
+        import json
+
+        dst.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    elif source_config:
         shutil.copy2(source_config, dst)
     else:
         shutil.copy2(CONFIG_EXAMPLE_PATH, dst)
@@ -249,7 +254,12 @@ def create_build_tree(src_root: Path, build_dir: Path, dist_name: str = "aws-con
 # ===== インストール・アンインストール スケルトン =====
 
 
-def install_app(install_dir: Path, shortcuts_dir: Optional[Path] = None, config_source: Optional[Path] = None) -> List[Path]:
+def install_app(
+    install_dir: Path,
+    shortcuts_dir: Optional[Path] = None,
+    config_source: Optional[Path] = None,
+    config_data: Optional[Dict[str, Any]] = None,
+) -> List[Path]:
     """
     指定されたディレクトリにアプリをコピーし、ショートカット/自動起動用のファイルを生成する。
     """
@@ -266,7 +276,7 @@ def install_app(install_dir: Path, shortcuts_dir: Optional[Path] = None, config_
         else:
             shutil.copy2(src, dst)
 
-    prepare_config(install_dir, source_config=config_source)
+    prepare_config(install_dir, source_config=config_source, data=config_data)
 
     shortcuts_dir = shortcuts_dir or default_paths().get("autostart_dir", install_dir / "shortcuts")
     entries = generate_autostart_entries(install_dir, shortcuts_dir)
@@ -353,6 +363,7 @@ class InstallOptions:
     install_dir: Path
     config_source: Optional[Path] = None
     use_example_config: bool = True
+    config_data: Optional[Dict[str, Any]] = None
     autostart: bool = True
     shortcuts_dir: Optional[Path] = None
     auto_install_missing: bool = False
@@ -385,6 +396,7 @@ def perform_install(opts: InstallOptions, runner: Callable[..., subprocess.Compl
         opts.install_dir,
         shortcuts_dir=opts.shortcuts_dir,
         config_source=None if opts.use_example_config else opts.config_source,
+        config_data=opts.config_data if not opts.use_example_config else None,
     )
     if opts.autostart:
         executed.extend(enable_autostart(opts.install_dir, dry_run=False, runner=runner))
