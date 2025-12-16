@@ -1,5 +1,5 @@
 
-# aws-conn-tray
+# aws_conn_tray
 
 AWS SSO トークンと SSM ポートフォワード（RDS 用）を監視する Ubuntu 用トレイ常駐アプリ一式です。GUI は wxPython ベースのみです。
 
@@ -53,7 +53,7 @@ AWS SSO トークンと SSM ポートフォワード（RDS 用）を監視する
 例:
 
 ```bash
-mv aws-conn-tray ~/aws-conn-tray
+mv aws_conn_tray ~/aws_conn_tray
 ```
 
 ### 2. 設定ファイルを配置
@@ -61,8 +61,8 @@ mv aws-conn-tray ~/aws-conn-tray
 `config/config.example.json` を同階層の `config/config.json` にコピーして編集します（アプリはリポジトリ内の `config/config.json` を参照します）。
 
 ```bash
-cp ~/aws-conn-tray/config/config.example.json ~/aws-conn-tray/config/config.json
-nano ~/aws-conn-tray/config/config.json
+cp ~/aws_conn_tray/config/config.example.json ~/aws_conn_tray/config/config.json
+nano ~/aws_conn_tray/config/config.json
 ```
 
 編集ポイント:
