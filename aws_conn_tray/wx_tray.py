@@ -564,6 +564,8 @@ class WxTrayApp:
         設定ダイアログ。wx が無い場合や DISPLAY が無い場合は None を返す。
         - forwards をタブで編集できるようにし、「追加」ボタンでタブを増やす。
         - タブ名は name を入力するとリアルタイムに反映する。
+        - instance_id / profile / region / remote_host / sso_start_url にはペーストボタンを付与。
+        - グローバル数値設定にはデフォルト値復元ボタンを付与。
         """
         if wx is None or not _has_display():
             return None
@@ -576,17 +578,40 @@ class WxTrayApp:
         notebook = wx.Notebook(panel)
         forward_entries: List[Dict[str, wx.TextCtrl]] = []
 
+        def _paste_to_ctrl(ctrl: wx.TextCtrl):
+            """
+            クリップボードのテキストを取得して指定の TextCtrl に貼り付ける。
+            失敗しても例外は出さずログだけ残す。
+            """
+            try:
+                if not wx.TheClipboard.IsOpened():
+                    wx.TheClipboard.Open()
+                data = wx.TextDataObject()
+                if wx.TheClipboard.GetData(data):
+                    ctrl.SetValue(data.GetText())
+                wx.TheClipboard.Close()
+            except Exception as e:
+                log_message(f"[settings] paste failed: {e}")
+
         def create_forward_page(initial: Dict[str, Any]):
             page = wx.Panel(notebook)
             grid = wx.FlexGridSizer(rows=0, cols=2, hgap=8, vgap=8)
             grid.AddGrowableCol(1, 1)
             controls: Dict[str, wx.TextCtrl] = {}
 
+            paste_targets = {"instance_id", "profile", "region", "remote_host"}
+
             def add_field(label, key, value=""):
                 grid.Add(wx.StaticText(page, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
+                hs = wx.BoxSizer(wx.HORIZONTAL)
                 txt = wx.TextCtrl(page, value=str(value))
                 controls[key] = txt
-                grid.Add(txt, 1, wx.EXPAND)
+                hs.Add(txt, 1, wx.EXPAND | wx.RIGHT, 4)
+                if key in paste_targets:
+                    btn = wx.Button(page, label="ペースト", size=(70, 24))
+                    btn.Bind(wx.EVT_BUTTON, lambda _evt, t=txt: _paste_to_ctrl(t))
+                    hs.Add(btn, 0)
+                grid.Add(hs, 1, wx.EXPAND)
 
             add_field("名前", "name", initial.get("name", ""))
             add_field("インスタンスID", "instance_id", initial.get("instance_id", ""))
@@ -655,6 +680,14 @@ class WxTrayApp:
             txt = wx.TextCtrl(panel, value=str(current.get(key, default_val)))
             global_entries[key] = txt
             hs.Add(txt, 1, wx.EXPAND)
+            if key == "sso_start_url":
+                btn = wx.Button(panel, label="ペースト", size=(70, 24))
+                btn.Bind(wx.EVT_BUTTON, lambda _evt, t=txt: _paste_to_ctrl(t))
+                hs.Add(btn, 0, wx.LEFT, 4)
+            if key in {"sso_login_timeout_seconds", "sso_auto_refresh_margin_seconds", "tunnel_check_interval_seconds"}:
+                btn_def = wx.Button(panel, label="デフォルト", size=(80, 24))
+                btn_def.Bind(wx.EVT_BUTTON, lambda _evt, t=txt, v=default_val: t.SetValue(str(v)))
+                hs.Add(btn_def, 0, wx.LEFT, 4)
             return hs
 
         global_entries: Dict[str, wx.TextCtrl] = {}
@@ -683,7 +716,6 @@ class WxTrayApp:
         if result != wx.ID_OK:
             dlg.Destroy()
             return None
-
         # 入力値を dict に詰めて返す
         forwards_data: List[Dict[str, Any]] = []
         for controls in forward_entries:
@@ -693,6 +725,9 @@ class WxTrayApp:
         return {**global_data, "forwards": forwards_data}
 
     def _show_sso_prompt(self, auth_url: str, message: str, button_label: str = "開く"):
+        """
+        右下に出すミニダイアログを表示し、クリックで _launch_webview を呼ぶ。
+        """
         # 既存があればいったん閉じてメッセージを更新
         self._close_mini_prompt()
 
