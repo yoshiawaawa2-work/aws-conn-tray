@@ -1,4 +1,17 @@
 from aws_conn_tray import prerequisites
+from aws_conn_tray.config_loader import ForwardTarget
+
+
+def _fw(name="rds", host="db.example.com"):
+    return ForwardTarget(
+        name=name,
+        instance_id="i-123",
+        profile="prof",
+        region="reg",
+        local_port=15432,
+        remote_host=host,
+        remote_port=5432,
+    )
 
 
 def test_check_prerequisites_ok(monkeypatch):
@@ -10,7 +23,7 @@ def test_check_prerequisites_ok(monkeypatch):
     )
     monkeypatch.setattr(prerequisites, "check_profile_config", lambda profile: [])
 
-    ok, issues = prerequisites.check_prerequisites("prof", "reg", "i-123", "db.example.com")
+    ok, issues = prerequisites.check_prerequisites([_fw()])
     assert ok
     assert issues == []
 
@@ -20,7 +33,7 @@ def test_check_prerequisites_missing_aws(monkeypatch):
     monkeypatch.setattr(prerequisites, "_run_command", lambda *a, **k: (0, "", ""))
     monkeypatch.setattr(prerequisites, "check_profile_config", lambda profile: [])
 
-    ok, issues = prerequisites.check_prerequisites("prof", "reg", "i-123", "db.example.com")
+    ok, issues = prerequisites.check_prerequisites([_fw()])
     assert not ok
     assert any("aws CLI" in i for i in issues)
 
@@ -74,7 +87,7 @@ def test_check_prerequisites_flags_missing_remote_host(monkeypatch):
     monkeypatch.setattr(prerequisites, "_run_command", lambda *a, **k: (0, "aws-cli/2.0.0", ""))
     monkeypatch.setattr(prerequisites, "check_profile_config", lambda profile: [])
 
-    ok, issues = prerequisites.check_prerequisites("prof", "reg", "i-123", "")
+    ok, issues = prerequisites.check_prerequisites([_fw(host="")])
 
     assert ok is False
     assert any("remote_host" in i for i in issues)
@@ -85,7 +98,7 @@ def test_check_prerequisites_warns_when_awscli_not_v2(monkeypatch):
     monkeypatch.setattr(prerequisites, "_run_command", lambda *a, **k: (0, "aws-cli/1.27.0", ""))
     monkeypatch.setattr(prerequisites, "check_profile_config", lambda profile: [])
 
-    ok, issues = prerequisites.check_prerequisites("prof", "reg", "i-123", "db.example.com")
+    ok, issues = prerequisites.check_prerequisites([_fw()])
 
     assert ok is False
     assert any("AWS CLI v2 ではない可能性があります" in i for i in issues)
@@ -93,15 +106,17 @@ def test_check_prerequisites_warns_when_awscli_not_v2(monkeypatch):
 
 def test_check_prerequisites_skip_ssm(monkeypatch):
     monkeypatch.setattr(prerequisites, "shutil", type("S", (), {"which": lambda _: "/usr/bin/aws"}))
+
     # SSM コマンドは実行されない前提で必ず失敗を返す
     def fake_run(cmd, timeout=5):
         if "describe-instance-information" in cmd:
             return (1, "", "token expired")
         return (0, "aws-cli/2.0.0", "")
+
     monkeypatch.setattr(prerequisites, "_run_command", fake_run)
     monkeypatch.setattr(prerequisites, "check_profile_config", lambda profile: [])
 
-    ok, issues = prerequisites.check_prerequisites("prof", "reg", "i-123", "db.example.com", require_ssm=False)
+    ok, issues = prerequisites.check_prerequisites([_fw()], require_ssm=False)
 
     assert ok is True
     assert issues == []

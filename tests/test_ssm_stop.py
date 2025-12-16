@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import aws_conn_tray.ssm as ssm
+from aws_conn_tray.config_loader import ForwardTarget
 
 
 def make_proc(rc=None, pid=1234):
@@ -15,7 +16,8 @@ def make_proc(rc=None, pid=1234):
 
 
 def test_start_uses_start_new_session_and_calls_stop(monkeypatch):
-    pf = ssm.SsmPortForward(
+    target = ForwardTarget(
+        name="rds",
         instance_id="i-123",
         profile="p",
         region="r",
@@ -23,6 +25,7 @@ def test_start_uses_start_new_session_and_calls_stop(monkeypatch):
         remote_host="h",
         remote_port=5432,
     )
+    pf = ssm.SsmPortForward(target)
     # stop should be invoked
     monkeypatch.setattr(pf, "stop", mock.Mock())
     monkeypatch.setattr(ssm, "_cleanup_lingering_sessions", mock.Mock())
@@ -42,7 +45,8 @@ def test_start_uses_start_new_session_and_calls_stop(monkeypatch):
 
 
 def test_start_port_in_use_abort(monkeypatch):
-    pf = ssm.SsmPortForward(
+    target = ForwardTarget(
+        name="rds",
         instance_id="i-123",
         profile="p",
         region="r",
@@ -50,6 +54,7 @@ def test_start_port_in_use_abort(monkeypatch):
         remote_host="h",
         remote_port=5432,
     )
+    pf = ssm.SsmPortForward(target)
     monkeypatch.setattr(pf, "stop", mock.Mock())
     monkeypatch.setattr(ssm, "_is_port_in_use", mock.Mock(return_value=True))
     log_occ = mock.Mock()
@@ -66,7 +71,8 @@ def test_start_port_in_use_abort(monkeypatch):
 
 def test_stop_killpg_on_running(monkeypatch):
     monkeypatch.setattr("aws_conn_tray.ssm._is_port_in_use", lambda port: False)
-    pf = ssm.SsmPortForward(
+    target = ForwardTarget(
+        name="rds",
         instance_id="i-123",
         profile="p",
         region="r",
@@ -74,6 +80,7 @@ def test_stop_killpg_on_running(monkeypatch):
         remote_host="h",
         remote_port=5432,
     )
+    pf = ssm.SsmPortForward(target)
     proc = make_proc(rc=None, pid=111)
     pf.proc = proc
 

@@ -1,4 +1,5 @@
 from typing import Callable, Optional, Dict, Any, Tuple, List
+from dataclasses import dataclass
 import os
 import threading
 import json
@@ -24,13 +25,29 @@ except Exception:
 
 from .paths import ICON_DIR, CONFIG_PATH, CONFIG_EXAMPLE_PATH, APP_ROOT
 from .logger import log_message, notify
-from .config_loader import Config, load_config
+from .config_loader import Config, ForwardTarget, load_config
 from .sso import check_sso_token, is_sso_session_valid, start_sso_login_browser
 from .ssm import SsmPortForward, _cleanup_lingering_sessions
 
-WEBVIEW_STORAGE_DIR = os.path.expanduser("~/.cache/aws-rds-tray/webview")
-QT_WEBVIEW_STORAGE_DIR = os.path.expanduser("~/.cache/aws-rds-tray/qt-webview")
-MINI_PROMPT_SIZE = (280, 120)
+WEBVIEW_STORAGE_DIR = os.path.expanduser("~/.cache/aws_conn_tray/webview")
+QT_WEBVIEW_STORAGE_DIR = os.path.expanduser("~/.cache/aws_conn_tray/qt-webview")
+# 全ミニダイアログ共通のサイズ（横幅20文字程度が収まる想定）。前回より少し高さを戻してコンパクトに。
+MINI_PROMPT_SIZE = (360, 320)
+# 行数が増えるメッセージにも対応できる高さ（MINI_PROMPT_SIZE と同値で統一）
+MINI_PROMPT_HEIGHT = 320
+# 設定ダイアログの最小サイズ（GTK の高さ0警告を防ぎ、コンテンツが収まる寸法）
+SETTINGS_DIALOG_MIN_SIZE = (560, 560)
+# 認可URL取得失敗時の統一メッセージ（手動で改行を入れて 20 文字前後に収める）
+FAIL_AUTH_URL_MESSAGE = (
+    "認可URLの取得に失敗しました。\n"
+    "アプリアイコンのクリックメニューの\n"
+    "「SSO ログイン」、又は、\n"
+    "右下の「開く」ボタンから\n"
+    "ログインしてください。\n"
+    "（AWS CLI が未設定/\n"
+    "ネットワーク不通などの\n"
+    "可能性があります）"
+)
 # Qt WebView サブプロセス管理用
 _qt_webview_procs: List[subprocess.Popen] = []
 
@@ -55,6 +72,23 @@ def _has_display():
         return False
 
 
+@dataclass
+class ForwardRuntime:
+    """
+    フォワード定義と実行状態をまとめて持つコンテナ。
+    - forward: 設定値そのもの
+    - ssm: 実際に起動する SsmPortForward インスタンス
+    - retry_count / notified_port: ポート衝突時のリトライ管理
+    - status: tray 表示用の状態 (green/yellow/red)
+    """
+
+    forward: ForwardTarget
+    ssm: SsmPortForward
+    retry_count: int = 0
+    notified_port: bool = False
+    status: str = "red"
+
+
 class WxTrayIcon(wx.adv.TaskBarIcon):
     """
     トレイアイコンとメニュー。
@@ -65,15 +99,19 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
         parent=None,
         on_settings: Optional[Callable[[], None]] = None,
         on_sso_login: Optional[Callable[[], None]] = None,
-        on_reconnect: Optional[Callable[[], None]] = None,
+        on_reconnect_all: Optional[Callable[[], None]] = None,
+        on_reconnect_single: Optional[Callable[[str], None]] = None,
         on_quit: Optional[Callable[[], None]] = None,
+        forward_statuses: Optional[Dict[str, str]] = None,
     ):
         super().__init__()
         self.parent = parent
         self.cb_settings = on_settings
         self.cb_sso_login = on_sso_login
-        self.cb_reconnect = on_reconnect
+        self.cb_reconnect_all = on_reconnect_all
+        self.cb_reconnect_single = on_reconnect_single
         self.cb_quit = on_quit
+        self.forward_statuses: Dict[str, str] = forward_statuses or {}
         self.set_icon_color("red")
         # 左右クリックどちらでもメニューを開けるようにする
         self.Bind(wx.adv.EVT_TASKBAR_LEFT_DOWN, self._on_taskbar_click)
@@ -88,7 +126,7 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
         return [
             ("⚙️ 設定", "on_settings"),
             ("SSO ログイン", "on_sso_login"),
-            ("ポートフォワード再接続", "on_reconnect"),
+            ("全フォワード再接続", "on_reconnect_all"),
             (None, None),  # separator
             ("終了", "on_quit"),
         ]
@@ -103,6 +141,18 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
             handler = getattr(self, handler_name, None)
             if handler:
                 self.Bind(wx.EVT_MENU, handler, item)
+        # 状態表示 + 個別再接続を後段に追加
+        if self.forward_statuses:
+            menu.AppendSeparator()
+            # 状態表示（選択不可）
+            for name, status in self.forward_statuses.items():
+                item = menu.Append(-1, f"[{status}] {name}")
+                item.Enable(False)
+            menu.AppendSeparator()
+            # 個別再接続
+            for name in self.forward_statuses.keys():
+                item = menu.Append(-1, f"{name} を再接続")
+                self.Bind(wx.EVT_MENU, lambda evt, n=name: self.on_reconnect_single(n), item)
         return menu
 
     def _on_taskbar_click(self, event):
@@ -129,8 +179,17 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
             self.cb_sso_login()
 
     def on_reconnect(self, _evt=None):
-        if self.cb_reconnect:
-            self.cb_reconnect()
+        # 互換用: 全体再接続にフォールバック
+        if self.cb_reconnect_all:
+            self.cb_reconnect_all()
+
+    def on_reconnect_all(self, _evt=None):
+        if self.cb_reconnect_all:
+            self.cb_reconnect_all()
+
+    def on_reconnect_single(self, name: str):
+        if self.cb_reconnect_single:
+            self.cb_reconnect_single(name)
 
     def on_quit(self, _evt=None):
         if self.cb_quit:
@@ -166,42 +225,43 @@ class WxTrayApp:
         self._app.SetTopWindow(self._frame)
         self.tray_icon: Optional[WxTrayIcon] = None
         self.config: Optional[Config] = None
-        self.ssm: Optional[SsmPortForward] = None
+        self.forward_states: Dict[str, ForwardRuntime] = {}
         self.timer: Optional[wx.Timer] = None
         self._refreshing = False
         self._notified_invalid = False
         self._last_webview_frame: Optional[wx.Frame] = None
         self._mini_prompt: Optional["MiniPrompt"] = None
         self._webview_running = False
-        self._port_notified = False
-        self._port_retry_count = 0
         self._shutting_down = False
+        # マルチフォワードの代表（認可URL取得などで使用）をキャッシュする
+        self._primary_forward: Optional[ForwardTarget] = None
 
     def OnInit(self):
         return True
 
     def init_tray(self, callbacks: dict, config: Optional[Config] = None):
         self.config = config or load_config()
-        self.ssm = SsmPortForward(
-            instance_id=self.config.instance_id,
-            profile=self.config.profile,
-            region=self.config.region,
-            local_port=self.config.local_port,
-            remote_host=self.config.remote_host,
-            remote_port=self.config.remote_port,
-        )
+        # 複数フォワードを ForwardRuntime として準備
+        self.forward_states = {}
+        for fw in self.config.forwards:
+            self.forward_states[fw.name] = ForwardRuntime(forward=fw, ssm=SsmPortForward(fw))
+        # 認可URL取得等で利用する代表フォワード（先頭）を保持
+        self._primary_forward = self.config.forwards[0] if self.config.forwards else None
         # コールバックは dict で受け取る（未設定は None）
         callbacks = callbacks or {}
         callbacks.setdefault("settings", self.on_settings)
         callbacks.setdefault("sso_login", self.on_sso_login)
-        callbacks.setdefault("reconnect", self.on_reconnect)
+        callbacks.setdefault("reconnect_all", self.on_reconnect_all)
+        callbacks.setdefault("reconnect_single", self.on_reconnect_single)
         callbacks.setdefault("quit", self.on_quit)
         self.tray_icon = WxTrayIcon(
             parent=self._frame,
             on_settings=callbacks.get("settings"),
             on_sso_login=callbacks.get("sso_login"),
-            on_reconnect=callbacks.get("reconnect"),
+            on_reconnect_all=callbacks.get("reconnect_all"),
+            on_reconnect_single=callbacks.get("reconnect_single"),
             on_quit=callbacks.get("quit"),
+            forward_statuses={name: "red" for name in self.forward_states.keys()},
         )
         # 監視タイマー
         self._start_monitor()
@@ -216,6 +276,48 @@ class WxTrayApp:
         self._app.Bind(wx.EVT_TIMER, lambda evt: self.monitor_once(), self.timer)
         self.timer.Start(self.config.tunnel_check_interval_seconds * 1000)
         self.monitor_once()
+
+    def _get_primary_forward(self) -> Optional[ForwardTarget]:
+        """
+        認可URL取得などで使用する代表フォワードを返す。
+        - 既にキャッシュがあればそれを返す。
+        - forward_states があれば先頭を採用。
+        - config.forwards があれば先頭を採用。
+        - レガシーな config.profile/region 形式があればダミーの ForwardTarget を生成して利用する。
+        """
+        if getattr(self, "_primary_forward", None):
+            return self._primary_forward
+        # forward_states があれば最初のものを利用
+        if getattr(self, "forward_states", None):
+            try:
+                first_state = next(iter(self.forward_states.values()))
+                self._primary_forward = first_state.forward
+                return self._primary_forward
+            except Exception:
+                pass
+        # config.forwards から取得
+        if self.config and getattr(self.config, "forwards", None):
+            try:
+                self._primary_forward = self.config.forwards[0]
+                return self._primary_forward
+            except Exception:
+                pass
+        # レガシー形式へのフォールバック（テスト用スタブ互換）
+        if self.config and hasattr(self.config, "profile"):
+            try:
+                self._primary_forward = ForwardTarget(
+                    name="default",
+                    instance_id=getattr(self.config, "instance_id", ""),
+                    profile=getattr(self.config, "profile", ""),
+                    region=getattr(self.config, "region", ""),
+                    local_port=int(getattr(self.config, "local_port", 0) or 0),
+                    remote_host=getattr(self.config, "remote_host", ""),
+                    remote_port=int(getattr(self.config, "remote_port", 0) or 0),
+                )
+                return self._primary_forward
+            except Exception:
+                pass
+        return None
 
     def MainLoop(self):
         self._app.MainLoop()
@@ -240,15 +342,16 @@ class WxTrayApp:
                 self.timer.Stop()
             except Exception:
                 pass
-        if self.ssm:
+        # 複数フォワードを停止
+        for state in (getattr(self, "forward_states", {}) or {}).values():
             try:
-                if self.ssm.is_alive():
-                    self.ssm.stop()
+                if state.ssm.is_alive():
+                    state.ssm.stop()
                 else:
                     # 念のため stop でプロセスを明示的に解放
-                    self.ssm.stop()
+                    state.ssm.stop()
             except Exception as e:
-                log_message(f"[ssm] stop during shutdown failed: {e}")
+                log_message(f"[ssm] [{state.forward.name}] stop during shutdown failed: {e}")
         # 残存 session-manager-plugin / ssm start-session の掃除（安全のため）
         try:
             _cleanup_lingering_sessions("shutdown")
@@ -273,18 +376,9 @@ class WxTrayApp:
             return
         if getattr(self, "_shutting_down", False):
             return
-        # ensure counters exist even in test-made instances
-        if not hasattr(self, "_port_retry_count"):
-            self._port_retry_count = 0
-        if not hasattr(self, "_port_notified"):
-            self._port_notified = False
-
         token_ok, remaining = check_sso_token(expected_start_url=self.config.sso_start_url)
-        if token_ok and not is_sso_session_valid(self.config.profile, self.config.region):
-            token_ok = False
-
-        tunnel_ok = self.ssm.is_alive() if self.ssm else False
-        log_message(f"[wx-monitor] token_ok={token_ok} remaining={remaining} tunnel_ok={tunnel_ok}")
+        # 各フォワードはプロファイルが異なる可能性があるため、STS 成否をフォワード単位で確認する
+        forward_statuses: Dict[str, str] = {}
 
         # 期限内かつ margin 以内なら自動更新を試みる
         if token_ok and remaining is not None:
@@ -299,30 +393,42 @@ class WxTrayApp:
         if token_ok:
             self._notified_invalid = False
             self._close_mini_prompt()
-            if not tunnel_ok and self.ssm:
-                self.tray_icon.set_icon_color("yellow")
-                started = self.ssm.start()
-                if not started:
-                    self._port_retry_count += 1
-                    if not self._port_notified:
-                        notify("ポートフォワード", f"ローカルポート {self.config.local_port} が使用中です。")
-                        self._port_notified = True
-                    if self._port_retry_count >= 3:
-                        msg = f"ローカルポート {self.config.local_port} が使用中です。アプリを終了します。"
-                        notify("ポートフォワード", msg)
-                        log_message("[ssm] port still in use after retries -> shutdown")
-                        self.tray_icon.set_icon_color("red")
-                        self._shutting_down = True
-                        wx.CallAfter(self.shutdown)
-                        return
-                    self.tray_icon.set_icon_color("red")
+            for name, state in self.forward_states.items():
+                # プロファイルごとに STS が成功するかを確認
+                session_ok = is_sso_session_valid(state.forward.profile, state.forward.region)
+                if not session_ok:
+                    # セッション無効なら再ログインを促す
+                    forward_statuses[name] = "red"
+                    state.status = "red"
+                    continue
+
+                if not state.ssm.is_alive():
+                    # トークン有効だがトンネル未接続 → 再接続を試行
+                    forward_statuses[name] = "yellow"
+                    self.tray_icon.set_icon_color("yellow")
+                    started = state.ssm.start()
+                    if not started:
+                        state.retry_count += 1
+                        if not state.notified_port:
+                            notify("ポートフォワード", f"{name}: ローカルポート {state.forward.local_port} が使用中です。")
+                            state.notified_port = True
+                        if state.retry_count >= 3:
+                            msg = f"{name}: ローカルポート {state.forward.local_port} が使用中です。再接続を中止します。"
+                            notify("ポートフォワード", msg)
+                            log_message(f"[ssm] [{name}] port still in use after retries -> giving up")
+                            forward_statuses[name] = "red"
+                            state.status = "red"
+                            continue
+                        state.status = "yellow"
+                    else:
+                        state.notified_port = False
+                        state.retry_count = 0
+                        state.status = "yellow"
                 else:
-                    self._port_notified = False
-                    self._port_retry_count = 0
-            elif tunnel_ok:
-                self._port_notified = False
-                self._port_retry_count = 0
-                self.tray_icon.set_icon_color("green")
+                    state.notified_port = False
+                    state.retry_count = 0
+                    forward_statuses[name] = "green"
+                    state.status = "green"
         else:
             # トークン無効時はミニダイアログで WebView 誘導
             if not self._notified_invalid:
@@ -330,7 +436,23 @@ class WxTrayApp:
                 self._show_sso_prompt(self.config.sso_start_url, msg)
                 log_message("[wx-monitor] token invalid, prompting login")
                 self._notified_invalid = True
-            self.tray_icon.set_icon_color("red")
+            # 全フォワードを赤扱い
+            for name in self.forward_states.keys():
+                forward_statuses[name] = "red"
+                self.forward_states[name].status = "red"
+
+        # 集計してトレイアイコン色を決定
+        if forward_statuses:
+            if any(status == "red" for status in forward_statuses.values()):
+                icon_color = "red"
+            elif any(status == "yellow" for status in forward_statuses.values()):
+                icon_color = "yellow"
+            else:
+                icon_color = "green"
+            # 最終的な集計結果でアイコンを 1 回だけ更新
+            self.tray_icon.set_icon_color(icon_color)
+            # メニュー側の状態表示にも反映
+            self.tray_icon.forward_statuses = forward_statuses
 
     def _start_sso_refresh(self):
         """
@@ -339,6 +461,11 @@ class WxTrayApp:
 
         def worker():
             try:
+                forward = self._get_primary_forward()
+                if not forward:
+                    log_message("[wx-refresh] no primary forward, skip refresh")
+                    return
+
                 def call_ui(fn: Callable[[], None]):
                     try:
                         if wx.GetApp() is not None and hasattr(wx, "CallAfter"):
@@ -349,8 +476,8 @@ class WxTrayApp:
                         log_message(f"[wx-refresh] call_ui error: {e}")
 
                 url, code = _fetch_authorize_url(
-                    self.config.profile,
-                    self.config.region,
+                    forward.profile,
+                    forward.region,
                     self.config.sso_start_url,
                     timeout=self.config.sso_login_timeout_seconds,
                 )
@@ -359,8 +486,8 @@ class WxTrayApp:
                     # 自動で WebView を開き、失敗時は MiniPrompt/通知がフォールバック
                     call_ui(lambda: start_sso_login_webview(url))
                 else:
-                    msg = "認可URLの取得に失敗しました。以下のボタンで再試行してください。"
-                    call_ui(lambda: self._show_sso_prompt(self.config.sso_start_url, msg, "再試行"))
+                    # 自動更新時も同じ考え方でブラウザ誘導に切り替える
+                    call_ui(lambda: self._show_browser_prompt(self.config.sso_start_url, FAIL_AUTH_URL_MESSAGE))
             finally:
                 self._refreshing = False
 
@@ -395,20 +522,39 @@ class WxTrayApp:
         self._notified_invalid = False
 
     def on_reconnect(self):
-        if self.ssm and not self.ssm.is_alive():
+        # 後方互換: 全フォワード再接続に委譲
+        self.on_reconnect_all()
+
+    def on_reconnect_all(self):
+        for name, state in self.forward_states.items():
+            self._reconnect_forward(name, state)
+
+    def on_reconnect_single(self, name: str):
+        state = self.forward_states.get(name)
+        if not state:
+            notify("ポートフォワード", f"{name}: 設定が見つかりません。")
+            return
+        self._reconnect_forward(name, state)
+
+    def _reconnect_forward(self, name: str, state: ForwardRuntime):
+        """
+        個別フォワードの再接続処理。状態と通知の更新もここで行う。
+        """
+        if state.ssm.is_alive():
+            notify("ポートフォワード", f"{name}: すでにフォワードは有効です。")
+            state.status = "green"
+            return
+        if self.tray_icon:
             self.tray_icon.set_icon_color("yellow")
-            started = self.ssm.start()
-            if not started:
-                notify("ポートフォワード", f"ローカルポート {self.config.local_port} が使用中です。")
-                self.tray_icon.set_icon_color("red")
-                self._port_retry_count += 1
-                if self._port_retry_count >= 3:
-                    msg = f"ローカルポート {self.config.local_port} が使用中です。アプリを終了します。"
-                    notify("ポートフォワード", msg)
-                    log_message(f"[ssm] port still in use after retries -> shutdown")
-                    wx.CallAfter(self.shutdown)
-        else:
-            notify("ポートフォワード", "すでにポートフォワードは有効です。")
+        started = state.ssm.start()
+        if not started:
+            notify("ポートフォワード", f"{name}: ローカルポート {state.forward.local_port} が使用中です。")
+            state.retry_count += 1
+            state.status = "red"
+            return
+        state.retry_count = 0
+        state.notified_port = False
+        state.status = "yellow"
 
     def on_quit(self):
         self.shutdown()
@@ -416,35 +562,108 @@ class WxTrayApp:
     def _show_settings_dialog(self, current: Dict[str, Any], defaults: Dict[str, Any]):
         """
         設定ダイアログ。wx が無い場合や DISPLAY が無い場合は None を返す。
+        - forwards をタブで編集できるようにし、「追加」ボタンでタブを増やす。
+        - タブ名は name を入力するとリアルタイムに反映する。
         """
         if wx is None or not _has_display():
             return None
-        dlg = wx.Dialog(None, title="設定", size=(400, 400))
+        # 親を隠しフレームに紐付けておくと GTK でのリサイズ警告が減る
+        dlg = wx.Dialog(self._frame or None, title="設定", size=SETTINGS_DIALOG_MIN_SIZE)
         panel = wx.Panel(dlg)
         sizer = wx.BoxSizer(wx.VERTICAL)
-        entries = {}
 
-        def add_text(label, key):
+        # forwards をタブで管理
+        notebook = wx.Notebook(panel)
+        forward_entries: List[Dict[str, wx.TextCtrl]] = []
+
+        def create_forward_page(initial: Dict[str, Any]):
+            page = wx.Panel(notebook)
+            grid = wx.FlexGridSizer(rows=0, cols=2, hgap=8, vgap=8)
+            grid.AddGrowableCol(1, 1)
+            controls: Dict[str, wx.TextCtrl] = {}
+
+            def add_field(label, key, value=""):
+                grid.Add(wx.StaticText(page, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
+                txt = wx.TextCtrl(page, value=str(value))
+                controls[key] = txt
+                grid.Add(txt, 1, wx.EXPAND)
+
+            add_field("名前", "name", initial.get("name", ""))
+            add_field("インスタンスID", "instance_id", initial.get("instance_id", ""))
+            add_field("プロファイル", "profile", initial.get("profile", ""))
+            add_field("リージョン", "region", initial.get("region", ""))
+            add_field("リモートホスト", "remote_host", initial.get("remote_host", ""))
+            add_field("リモートポート", "remote_port", initial.get("remote_port", defaults.get("remote_port", 5432)))
+            add_field("ローカルポート", "local_port", initial.get("local_port", defaults.get("local_port", 15432)))
+
+            page.SetSizer(grid)
+            notebook.AddPage(page, initial.get("name", "新規"))
+
+            # 名前変更時にタブタイトルも更新する
+            def on_name_change(evt):
+                title = evt.GetString() or "新規"
+                idx = notebook.GetPageIndex(page)
+                if idx >= 0:
+                    notebook.SetPageText(idx, title)
+                evt.Skip()
+
+            controls["name"].Bind(wx.EVT_TEXT, on_name_change)
+            forward_entries.append(controls)
+
+        forwards_current = current.get("forwards") or []
+        if not forwards_current:
+            forwards_current = [
+                {
+                    "name": "rds",
+                    "instance_id": "",
+                    "profile": "",
+                    "region": "",
+                    "remote_host": "",
+                    "remote_port": defaults.get("remote_port", 5432),
+                    "local_port": defaults.get("local_port", 15432),
+                }
+            ]
+        for fw in forwards_current:
+            create_forward_page(fw)
+
+        sizer.Add(notebook, 1, wx.ALL | wx.EXPAND, 8)
+
+        # タブ追加ボタン
+        def on_add_tab(_evt=None):
+            idx = len(forward_entries) + 1
+            create_forward_page(
+                {
+                    "name": f"forward-{idx}",
+                    "instance_id": "",
+                    "profile": "",
+                    "region": "",
+                    "remote_host": "",
+                    "remote_port": defaults.get("remote_port", 5432),
+                    "local_port": defaults.get("local_port", 15432),
+                }
+            )
+            notebook.ChangeSelection(notebook.GetPageCount() - 1)
+
+        btn_add = wx.Button(panel, label="追加")
+        btn_add.Bind(wx.EVT_BUTTON, on_add_tab)
+        sizer.Add(btn_add, 0, wx.LEFT | wx.BOTTOM, 8)
+
+        # グローバル設定
+        def add_global_field(label, key, default_val):
             hs = wx.BoxSizer(wx.HORIZONTAL)
-            hs.Add(wx.StaticText(panel, label=label), 0, wx.ALL, 5)
-            txt = wx.TextCtrl(panel, value=str(current.get(key, "")))
-            entries[key] = txt
-            hs.Add(txt, 1, wx.ALL | wx.EXPAND, 5)
-            sizer.Add(hs, 0, wx.EXPAND)
+            hs.Add(wx.StaticText(panel, label=label), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+            txt = wx.TextCtrl(panel, value=str(current.get(key, default_val)))
+            global_entries[key] = txt
+            hs.Add(txt, 1, wx.EXPAND)
+            return hs
 
-        def add_int(label, key):
-            hs = wx.BoxSizer(wx.HORIZONTAL)
-            hs.Add(wx.StaticText(panel, label=label), 0, wx.ALL, 5)
-            txt = wx.TextCtrl(panel, value=str(current.get(key, defaults.get(key, 0))))
-            entries[key] = txt
-            hs.Add(txt, 1, wx.ALL | wx.EXPAND, 5)
-            sizer.Add(hs, 0, wx.EXPAND)
+        global_entries: Dict[str, wx.TextCtrl] = {}
+        sizer.Add(add_global_field("SSO Start URL", "sso_start_url", current.get("sso_start_url", "")), 0, wx.EXPAND | wx.ALL, 6)
+        sizer.Add(add_global_field("SSO ログインタイムアウト(秒)", "sso_login_timeout_seconds", defaults.get("sso_login_timeout_seconds", 900)), 0, wx.EXPAND | wx.ALL, 6)
+        sizer.Add(add_global_field("自動更新マージン(秒)", "sso_auto_refresh_margin_seconds", defaults.get("sso_auto_refresh_margin_seconds", 300)), 0, wx.EXPAND | wx.ALL, 6)
+        sizer.Add(add_global_field("監視間隔(秒)", "tunnel_check_interval_seconds", defaults.get("tunnel_check_interval_seconds", 10)), 0, wx.EXPAND | wx.ALL, 6)
 
-        for key in REQUIRED_KEYS:
-            add_text(key, key)
-        for key in INT_KEYS:
-            add_int(key, key)
-
+        # ボタン
         btns = wx.StdDialogButtonSizer()
         btn_ok = wx.Button(panel, wx.ID_OK)
         btn_cancel = wx.Button(panel, wx.ID_CANCEL)
@@ -453,15 +672,25 @@ class WxTrayApp:
         btns.Realize()
         sizer.Add(btns, 0, wx.ALIGN_CENTER | wx.ALL, 5)
 
+        # レイアウトを確定させ、GTK が高さ0/幅負を計算しないよう最小サイズを明示する
         panel.SetSizer(sizer)
+        sizer.Fit(panel)
+        panel.Layout()
         dlg.Fit()
+        dlg.SetMinSize(SETTINGS_DIALOG_MIN_SIZE)
+        dlg.Layout()
         result = dlg.ShowModal()
         if result != wx.ID_OK:
             dlg.Destroy()
             return None
-        data = {k: entries[k].GetValue() for k in entries}
+
+        # 入力値を dict に詰めて返す
+        forwards_data: List[Dict[str, Any]] = []
+        for controls in forward_entries:
+            forwards_data.append({k: ctrl.GetValue() for k, ctrl in controls.items()})
+        global_data = {k: ctrl.GetValue() for k, ctrl in global_entries.items()}
         dlg.Destroy()
-        return data
+        return {**global_data, "forwards": forwards_data}
 
     def _show_sso_prompt(self, auth_url: str, message: str, button_label: str = "開く"):
         # 既存があればいったん閉じてメッセージを更新
@@ -516,6 +745,10 @@ class WxTrayApp:
         def worker():
             self._webview_running = True
             try:
+                forward = self._get_primary_forward()
+                if not forward:
+                    log_message("[webview-launch] no primary forward, abort")
+                    return
                 url_to_open = fallback_url
                 log_message(f"[webview-launch] requested (fallback={fallback_url})")
                 if not self.config:
@@ -524,8 +757,8 @@ class WxTrayApp:
                 try:
                     log_message("[webview-launch] fetching authorize url...")
                     url, _ = _fetch_authorize_url(
-                        self.config.profile,
-                        self.config.region,
+                        forward.profile,
+                        forward.region,
                         self.config.sso_start_url,
                         timeout=self.config.sso_login_timeout_seconds,
                     )
@@ -533,14 +766,16 @@ class WxTrayApp:
                         url_to_open = url
                         log_message(f"[webview-launch] authorize url fetched: {url}")
                     else:
+                        # ここで繰り返し _show_sso_prompt を出すと「開く」→再取得失敗→再度「開く」で無限ループになる。
+                        # 認可URLが取れない場合は AWS CLI やネットワーク前提が満たされていないと推測し、
+                        # ユーザにブラウザで start_url を開いてもらう誘導に切り替える。
                         log_message("[webview-launch] authorize url not found, request retry")
-                        msg = "認可URLの取得に失敗しました。以下のボタンを押して再試行してください。"
-                        wx.CallAfter(self._show_sso_prompt, fallback_url, msg, "再試行")
+                        wx.CallAfter(self._show_browser_prompt, fallback_url, FAIL_AUTH_URL_MESSAGE)
                         return
                 except Exception as e:
+                    # 例外発生時も同様にブラウザ誘導へ切り替える（繰り返しリトライは避ける）
                     log_message(f"[webview-launch] authorize url fetch failed: {e}")
-                    msg = "認可URLの取得に失敗しました。以下のボタンを押して再試行してください。"
-                    wx.CallAfter(self._show_sso_prompt, fallback_url, msg, "再試行")
+                    wx.CallAfter(self._show_browser_prompt, fallback_url, FAIL_AUTH_URL_MESSAGE)
                     return
 
                 ok = start_sso_login_webview(url_to_open)
@@ -549,8 +784,7 @@ class WxTrayApp:
                     # 成功したらミニダイアログは閉じる
                     wx.CallAfter(self._close_mini_prompt)
                 else:
-                    msg = "WebView を開けませんでした。以下のボタンから再試行してください。"
-                    wx.CallAfter(self._show_sso_prompt, fallback_url, msg, "再試行")
+                    wx.CallAfter(self._show_browser_prompt, fallback_url, FAIL_AUTH_URL_MESSAGE)
             finally:
                 self._webview_running = False
 
@@ -811,10 +1045,9 @@ def start_sso_login_webview(url: str) -> bool:
 
 # ===== 設定バリデーション =====
 
-REQUIRED_KEYS = ["instance_id", "profile", "region", "remote_host", "sso_start_url"]
-INT_KEYS = [
-    "local_port",
-    "remote_port",
+FORWARD_REQUIRED_KEYS = ["name", "instance_id", "profile", "region", "remote_host"]
+FORWARD_INT_KEYS = ["local_port", "remote_port"]
+GLOBAL_INT_KEYS = [
     "sso_login_timeout_seconds",
     "sso_auto_refresh_margin_seconds",
     "tunnel_check_interval_seconds",
@@ -822,16 +1055,40 @@ INT_KEYS = [
 
 
 def validate_settings_input(data: Dict[str, Any], defaults: Dict[str, Any]):
+    """
+    設定ダイアログから受け取った値を検証し、正常なら数値を int に変換した dict を返す。
+    - forwards: 必須。各 forward に必須文字列と数値を要求。
+    - グローバルな数値項目も 0 以上の整数のみ許容。
+    """
     errors = []
     parsed: Dict[str, Any] = {}
 
-    for key in REQUIRED_KEYS:
-        val = str(data.get(key, "")).strip()
-        if not val:
-            errors.append(f"{key}: 必須項目です。")
-        parsed[key] = val
+    forwards_raw = data.get("forwards") or []
+    if not isinstance(forwards_raw, list) or not forwards_raw:
+        errors.append("forwards: 1件以上のフォワード設定を追加してください。")
+        return False, errors, {}
 
-    for key in INT_KEYS:
+    forwards_parsed: List[Dict[str, Any]] = []
+    for idx, fw in enumerate(forwards_raw):
+        fw_parsed: Dict[str, Any] = {}
+        for key in FORWARD_REQUIRED_KEYS:
+            val = str(fw.get(key, "")).strip()
+            if not val:
+                errors.append(f"forward[{idx}].{key}: 必須項目です。")
+            fw_parsed[key] = val
+        for key in FORWARD_INT_KEYS:
+            raw = str(fw.get(key, "")).strip()
+            try:
+                num = int(raw)
+                if num < 0:
+                    raise ValueError()
+                fw_parsed[key] = num
+            except Exception:
+                default_val = defaults.get(key, "")
+                errors.append(f"forward[{idx}].{key}: 0以上の整数を入力してください。（例: {default_val}）")
+        forwards_parsed.append(fw_parsed)
+
+    for key in GLOBAL_INT_KEYS:
         raw = str(data.get(key, "")).strip()
         try:
             num = int(raw)
@@ -841,6 +1098,11 @@ def validate_settings_input(data: Dict[str, Any], defaults: Dict[str, Any]):
         except Exception:
             default_val = defaults.get(key, "")
             errors.append(f"{key}: 0以上の整数を入力してください。（デフォルト: {default_val}）")
+
+    parsed["forwards"] = forwards_parsed
+    parsed["sso_start_url"] = str(data.get("sso_start_url", "")).strip()
+    if not parsed["sso_start_url"]:
+        errors.append("sso_start_url: 必須項目です。")
 
     return len(errors) == 0, errors, parsed
 
@@ -870,12 +1132,18 @@ def _config_to_dict(cfg: Optional[Config]) -> Dict[str, Any]:
     if cfg is None:
         return {}
     return {
-        "instance_id": cfg.instance_id,
-        "profile": cfg.profile,
-        "region": cfg.region,
-        "remote_host": cfg.remote_host,
-        "remote_port": cfg.remote_port,
-        "local_port": cfg.local_port,
+        "forwards": [
+            {
+                "name": f.name,
+                "instance_id": f.instance_id,
+                "profile": f.profile,
+                "region": f.region,
+                "remote_host": f.remote_host,
+                "remote_port": f.remote_port,
+                "local_port": f.local_port,
+            }
+            for f in cfg.forwards
+        ],
         "sso_start_url": cfg.sso_start_url,
         "sso_login_timeout_seconds": cfg.sso_login_timeout_seconds,
         "sso_auto_refresh_margin_seconds": cfg.sso_auto_refresh_margin_seconds,
@@ -900,13 +1168,14 @@ class MiniPrompt(wx.Frame):
 
     def __init__(self, message: str, on_click: Callable[[], None], button_label: str = "開く"):
         style = wx.STAY_ON_TOP | wx.FRAME_NO_TASKBAR | wx.BORDER_SIMPLE
+        # すべてのミニダイアログで同一サイズを使用し、UI の揺れを防ぐ
         super().__init__(None, title="", size=MINI_PROMPT_SIZE, style=style)
         # 念のため常に最前面フラグを維持
         self.SetWindowStyleFlag(self.GetWindowStyle() | wx.STAY_ON_TOP)
         self.on_click = on_click
-        # 横幅は 20 文字程度に合わせてコンパクトに
-        self.SetSize((340, 180))
-        self.SetMinSize((340, 180))
+        # 横幅は 20 文字程度に合わせてコンパクトに、縦は行数に耐えられる高さを確保
+        self.SetSize(MINI_PROMPT_SIZE)
+        self.SetMinSize((MINI_PROMPT_SIZE[0], MINI_PROMPT_HEIGHT))
         panel = wx.Panel(self)
         panel.SetBackgroundColour(wx.Colour(245, 245, 245))
         sizer = wx.BoxSizer(wx.VERTICAL)
@@ -1011,15 +1280,23 @@ def _wrap_text_for_prompt(text: str, width: int = 20) -> str:
 
 
 def _parse_authorize_url(text: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    aws sso login の標準出力/エラーから URL とデバイスコードを抽出する。
+    - AWS のメッセージが地域や言語で変わっても拾えるよう、最初に登場する http/https を採用する。
+    - 従来は "authorize" を含む URL のみを採用していたが、実環境では device.sso.xxx… など
+      authorize を含まない URL が多いため、最初の URL を素直に採用することで取りこぼしを防ぐ。
+    """
     url = None
     code = None
     urls = [m.strip().rstrip(".") for m in re.findall(r"https?://\S+", text)]
-    for u in urls:
-        if "authorize" in u:
-            url = u
-            break
-    if url is None and urls:
-        url = urls[0]
+    if urls:
+        # 先頭の URL を採用。authorize が含まれている場合はその方がより確実なので優先。
+        for u in urls:
+            if "authorize" in u.lower():
+                url = u
+                break
+        if url is None:
+            url = urls[0]
     m = re.search(r"[A-Z0-9]{4}-[A-Z0-9]{4}", text)
     if m:
         code = m.group(0)
@@ -1070,13 +1347,20 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
                         break
                     ready, _, _ = select.select(read_fds, [], [], 1)
                     for stream in ready:
-                        line_bytes = os.read(stream, 4096)
+                        try:
+                            line_bytes = os.read(stream, 4096)
+                        except Exception:
+                            line_bytes = b""
                         if not line_bytes:
                             continue
                         line = line_bytes.decode(errors="ignore")
                         stdout_acc += line
-                        u, c = _parse_authorize_url(line)
-                        if u and "authorize" in u.lower():
+                        # 一部が分割されて届く可能性があるため、累積バッファ全体を毎回パースする
+                        u, c = _parse_authorize_url(stdout_acc)
+                        # 改行がまだ来ていない場合は URL が途中の可能性があるため、確定は遅らせる
+                        has_line_break = "\n" in stdout_acc or "\r" in stdout_acc
+                        if u and (has_line_break or (proc and proc.poll() is not None)):
+                            # authorize を含まなくても先頭の URL を採用し、取りこぼしを防ぐ
                             url, code = u, c
                             log_message(f"[wx-auth-url] authorize url fetched (stream): {u}")
                             break
@@ -1094,10 +1378,10 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
                     out, err = proc.communicate()
                 stdout_acc += out or ""
                 stderr_acc += err or ""
-                u, c = _parse_authorize_url(stdout_acc)
-                if u and "authorize" in (u or "").lower():
-                    url, code = u, c
-                    log_message(f"[wx-auth-url] authorize url fetched (pipe): {u}")
+            u, c = _parse_authorize_url(stdout_acc)
+            if u:
+                url, code = u, c
+                log_message(f"[wx-auth-url] authorize url fetched (pipe): {u}")
         except Exception as e:
             log_message(f"[wx-auth-url] error while reading: {e}")
             try:
@@ -1111,16 +1395,17 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
         if not url:
             # 最終的に見つからなければ結合して再度パース
             u2, c2 = _parse_authorize_url(stdout_acc + "\n" + stderr_acc)
-            if u2 and "authorize" in (u2 or "").lower():
+            if u2:
                 url, code = u2, c2
 
         if not url:
             log_message(f"[wx-auth-url] authorize url not found. stdout={stdout_acc!r} stderr={stderr_acc!r}")
             return None, code
 
-        return url, code
     finally:
-        if proc:
+        # URL を取得できた場合は aws sso login プロセスを生かしておく。
+        # （ここで kill/terminate すると認可完了前に落ちてトークンが保存されない）
+        if proc and not url:
             try:
                 if proc.poll() is None:
                     proc.terminate()
@@ -1142,6 +1427,8 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
                 if fd is not None:
                     with contextlib.suppress(Exception):
                         os.close(fd)
+    # URL 取得に成功した場合はここまで来るので返す
+    return url, code
 
 
 def _is_request_approved(title: str, url: str, body: str) -> bool:

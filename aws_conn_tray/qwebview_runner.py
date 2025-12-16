@@ -22,7 +22,7 @@ except Exception as e:
     QT_AVAILABLE = False
     QT_IMPORT_ERROR = str(e)
 
-DEFAULT_STORAGE = os.path.expanduser("~/.cache/aws-rds-tray/qt-webview")
+DEFAULT_STORAGE = os.path.expanduser("~/.cache/aws_conn_tray/qt-webview")
 
 
 def _is_callback_url(url_str: str) -> bool:

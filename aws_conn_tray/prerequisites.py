@@ -4,6 +4,8 @@ import shutil
 import subprocess
 from typing import List, Tuple
 
+from .config_loader import ForwardTarget
+
 from .logger import notify, log_message
 
 
@@ -40,12 +42,12 @@ def check_profile_config(profile: str) -> List[str]:
 
 
 def check_prerequisites(
-    profile: str,
-    region: str,
-    instance_id: str,
-    remote_host: str,
+    forwards: List[ForwardTarget],
     require_ssm: bool = True,
 ) -> Tuple[bool, List[str]]:
+    """
+    複数フォワード設定を前提に、共通前提条件 + 各フォワードごとの SSM 到達性を確認する。
+    """
     issues: List[str] = []
 
     aws_path = shutil.which("aws")
@@ -61,27 +63,31 @@ def check_prerequisites(
     if not smp_path:
         issues.append("session-manager-plugin が見つかりません。AWS SSM Session Manager Plugin をインストールしてください。")
 
-    issues.extend(check_profile_config(profile))
+    # 各フォワードについてプロファイル・SSM 到達性を確認
+    for forward in forwards:
+        issues.extend([f"[{forward.name}] {msg}" for msg in check_profile_config(forward.profile)])
 
-    if aws_path and require_ssm:
+        if not forward.remote_host:
+            issues.append(f"[{forward.name}] config の remote_host が設定されていません。")
+        if not aws_path or not require_ssm:
+            continue
         cmd = [
             aws_path,
             "ssm",
             "describe-instance-information",
             "--instance-information-filter-list",
-            f"key=InstanceIds,valueSet=[{instance_id}]",
+            f"key=InstanceIds,valueSet=[{forward.instance_id}]",
             "--profile",
-            profile,
+            forward.profile,
             "--region",
-            region,
+            forward.region,
         ]
         code, out, err = _run_command(cmd, timeout=10)
         if code != 0:
             detail = err or out or "不明なエラー"
-            issues.append(f"SSM でインスタンス {instance_id} を参照できません。権限やIDを確認してください: {detail}")
-
-    if not remote_host:
-        issues.append("config.json の remote_host が設定されていません。RDS のエンドポイントを指定してください。")
+            issues.append(
+                f"[{forward.name}] SSM でインスタンス {forward.instance_id} を参照できません。権限やIDを確認してください: {detail}"
+            )
 
     return len(issues) == 0, issues
 
