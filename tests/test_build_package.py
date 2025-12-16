@@ -23,11 +23,6 @@ def test_build_package_creates_artifacts(tmp_path, monkeypatch):
     monkeypatch.setattr(bp.installer_core, "create_build_tree", fake_create_tree)
     monkeypatch.setattr(bp.installer_core, "create_zip", fake_create_zip)
     monkeypatch.setattr(bp, "__file__", str(tmp_path / "build_package.py"))
-    monkeypatch.setattr(bp, "Path", Path)
-    # pytest の引数を避けるため argv を書き換える
-    monkeypatch.setattr(bp, "argparse", bp.argparse)
-    monkeypatch.setattr(bp.argparse, "ArgumentParser", bp.argparse.ArgumentParser)
-    monkeypatch.setattr(bp, "__name__", "__main__")
     import sys
     monkeypatch.setattr(sys, "argv", ["build_package.py"])
 

@@ -1,5 +1,4 @@
 # ランタイムで必要な Python パッケージ
-PySimpleGUI
 wxPython==4.2.1
 # user_data_dir をサポートする pywebview 5 系を使用
 pywebview==5.0.4
