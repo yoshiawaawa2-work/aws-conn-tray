@@ -34,6 +34,7 @@ Linux / Windows / macOS の 3OS で動作することを目標にしています
 - Python 3.10+ 推奨。
 - AWS CLI v2 / Session Manager Plugin がインストール済み。`aws configure sso` を完了していること。
 - psutil がインストール済みであること（ポート占有確認・残存プロセス掃除をクロスプラットフォームで行うため必須）。
+- PySimpleGUI は公式の private index からインストールしてください（PyPI の旧 stub パッケージでは GUI 部品が欠けます）。
 - 踏み台 EC2 が SSM で到達可能で、そこから対象 DB へ TCP で接続できること。
 
 ## セットアップ手順
@@ -42,7 +43,8 @@ Linux / Windows / macOS の 3OS で動作することを目標にしています
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -r requirements.txt
+# PySimpleGUI を公式 private index から取得するため extra-index-url を付与
+pip install --force-reinstall --extra-index-url https://PySimpleGUI.net/install -r requirements.txt -r requirements-dev.txt
 ```
 開発用ツールを入れる場合は `make install-dev` で `pytest/black` なども導入できます。
 
