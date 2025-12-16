@@ -138,6 +138,7 @@ def test_perform_install_preview(monkeypatch, tmp_path):
     monkeypatch.setattr(installer_core, "preinstall_check", lambda: installer_core.PreinstallResult(ok=True, issues=[], suggested_installs=[]))
     called = {}
     monkeypatch.setattr(installer_core, "install_app", lambda *a, **k: called.setdefault("install", True))
+    monkeypatch.setattr(installer_core, "enable_autostart", lambda *a, **k: called.setdefault("autostart", True))
 
     opts = installer_core.InstallOptions(install_dir=tmp_path, preview=True)
     res = installer_core.perform_install(opts)

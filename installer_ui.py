@@ -20,13 +20,14 @@ def build_layout(default_install: Path) -> list:
     return [
         [sg.Text("インストール先"), sg.Input(str(default_install), key="install_dir", size=(50, 1)), sg.FolderBrowse("参照")],
         [sg.Checkbox("ログイン時に自動起動を登録する", key="autostart", default=True)],
+        [sg.Checkbox("自動起動登録のみを実行（解除は下記で可能）", key="autostart_only", default=False)],
         [sg.Frame("設定ファイル", [
             [sg.Radio("サンプルから生成", "cfgsrc", key="cfg_sample", default=True)],
             [sg.Radio("既存 config.json を指定", "cfgsrc", key="cfg_import", default=False), sg.Input(key="cfg_path", size=(45, 1)), sg.FileBrowse("参照")],
         ])],
         [sg.Checkbox("前提が足りない場合に推奨コマンドを自動実行（自己責任）", key="auto_install_missing", default=False)],
         [sg.HorizontalSeparator()],
-        [sg.Button("インストール", bind_return_key=True), sg.Button("プレビュー", key="preview"), sg.Button("キャンセル")],
+        [sg.Button("インストール", bind_return_key=True), sg.Button("プレビュー", key="preview"), sg.Button("自動起動解除", key="disable_autostart"), sg.Button("キャンセル")],
         [sg.Multiline("", key="log", size=(70, 10), disabled=True)],
     ]
 
@@ -85,6 +86,12 @@ def run_gui(args):
         if event in (sg.WINDOW_CLOSED, "キャンセル"):
             break
         preview = event == "プレビュー" or args.preview
+        if event == "自動起動解除":
+            cmds = installer_core.disable_autostart(dry_run=preview)
+            msg = "自動起動解除を実行しました。" if not preview else "自動起動解除コマンド（プレビュー）: " + " | ".join(" ".join(c) for c in cmds)
+            sg.popup_ok(msg, keep_on_top=True)
+            _append_log(window, msg)
+            continue
         if event in ("インストール", "プレビュー"):
             install_dir = values.get("install_dir") or str(defaults["install"])
             cfg_import = values.get("cfg_import")
@@ -95,6 +102,12 @@ def run_gui(args):
                 no_autostart=not values.get("autostart", True),
                 auto_install_missing=values.get("auto_install_missing", False),
             )
+            if values.get("autostart_only"):
+                cmds = installer_core.enable_autostart(Path(install_dir), dry_run=preview)
+                msg = "自動起動登録のみ実行しました。" if not preview else "自動起動登録コマンド（プレビュー）: " + " | ".join(" ".join(c) for c in cmds)
+                sg.popup_ok(msg, keep_on_top=True)
+                _append_log(window, msg)
+                continue
             res = perform(opts, preview=preview)
             if res.ok:
                 msg = "プレビュー完了（実際のコピーや自動起動登録は行っていません）" if preview else "インストールが完了しました。"
