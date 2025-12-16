@@ -111,3 +111,81 @@ def test_log_port_occupant_skips_on_non_linux(monkeypatch):
 
     ssm_module._log_port_occupant(5432)
     assert "run" not in called
+
+
+def test_cleanup_lingering_sessions_psutil(monkeypatch):
+    # psutil が使える場合はプラットフォーム分岐に入らないことを確認
+    monkeypatch.setattr(ssm_module, "PSUTIL_AVAILABLE", True)
+    fake_procs = []
+
+    class DummyProc:
+        def __init__(self, pid, name, cmd):
+            self.pid = pid
+            self._name = name
+            self._cmd = cmd
+            fake_procs.append(self)
+
+        def info(self):
+            return {}
+
+        def name(self):
+            return self._name
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            self.killed = True
+
+    def fake_process_iter(attrs):
+        return [
+            type(
+                "P",
+                (),
+                {
+                    "pid": 123,
+                    "info": {"name": "session-manager-plugin", "cmdline": ["session-manager-plugin"]},
+                    "terminate": lambda self=None: None,
+                    "wait": lambda self=None, timeout=None: None,
+                    "kill": lambda self=None: None,
+                },
+            )()
+        ]
+
+    monkeypatch.setattr(ssm_module, "psutil", type("X", (), {"process_iter": fake_process_iter}), raising=False)
+    monkeypatch.setattr(ssm_module, "log_message", lambda *a, **k: None)
+
+    ssm_module._cleanup_lingering_sessions("test")
+    # taskkill/pgrep にフォールバックしないことを以って成功とする
+
+
+def test_log_port_occupant_psutil(monkeypatch):
+    monkeypatch.setattr(ssm_module, "PSUTIL_AVAILABLE", True)
+    called = {"log": []}
+
+    class DummyLaddr:
+        def __init__(self, port):
+            self.port = port
+
+    class Conn:
+        def __init__(self, pid, port):
+            self.laddr = DummyLaddr(port)
+            self.pid = pid
+            self.status = "LISTEN"
+
+    def fake_net_connections(kind):
+        return [Conn(pid=111, port=15432)]
+
+    def fake_process(pid):
+        return type("P", (), {"name": lambda self=None: "dummy"})()
+
+    monkeypatch.setattr(ssm_module, "psutil", type("X", (), {"net_connections": fake_net_connections, "Process": fake_process}), raising=False)
+    monkeypatch.setattr(ssm_module, "log_message", lambda msg: called["log"].append(msg))
+    monkeypatch.setattr(ssm_module.platforms, "is_linux", lambda: False)
+
+    ssm_module._log_port_occupant(15432)
+
+    assert any("psutil" in msg for msg in called["log"])

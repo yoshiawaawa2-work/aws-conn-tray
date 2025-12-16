@@ -33,6 +33,7 @@ Linux / Windows / macOS の 3OS で動作することを目標にしています
   - macOS: LaunchAgent で自動起動を設定する想定（plist は同梱していません）。プロセス掃除は pgrep 経由で行います。
 - Python 3.10+ 推奨。
 - AWS CLI v2 / Session Manager Plugin がインストール済み。`aws configure sso` を完了していること。
+- psutil がインストール済みであること（ポート占有確認・残存プロセス掃除をクロスプラットフォームで行うため必須）。
 - 踏み台 EC2 が SSM で到達可能で、そこから対象 DB へ TCP で接続できること。
 
 ## セットアップ手順
