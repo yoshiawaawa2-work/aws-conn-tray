@@ -144,10 +144,13 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
         # 状態表示 + 個別再接続を後段に追加
         if self.forward_statuses:
             menu.AppendSeparator()
-            # 状態表示（選択不可）
+            # メインメニュー上に状態表示セクションを設け、ヘッダーで区切って見分けやすくする
+            header = menu.Append(-1, "▼ フォワード状態（クリック不可）")
+            header.Enable(False)
             for name, status in self.forward_statuses.items():
-                item = menu.Append(-1, f"[{status}] {name}")
-                item.Enable(False)
+                emoji = {"red": "🟥", "yellow": "🟨", "green": "🟩"}.get(status, "⬜")
+                item = menu.Append(-1, f"{emoji} {name}")
+                item.Enable(False)  # インジケータのみ
             menu.AppendSeparator()
             # 個別再接続
             for name in self.forward_statuses.keys():
