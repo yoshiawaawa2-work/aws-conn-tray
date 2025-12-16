@@ -1,6 +1,16 @@
 import os
 
 import pytest
+import os
+import tkinter
+
+# GUI ライブラリが DISPLAY を要求するため、tkinter が初期化できない場合はスキップ
+try:
+    _root = tkinter.Tk()
+    _root.withdraw()
+    _root.destroy()
+except Exception:
+    pytest.skip("tkinter not available for GUI tests", allow_module_level=True)
 
 pytest.importorskip("PySimpleGUI")
 

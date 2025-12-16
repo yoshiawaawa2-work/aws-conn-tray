@@ -71,6 +71,7 @@ def test_cleanup_lingering_sessions_kills_found_pids(monkeypatch):
     monkeypatch.setattr("aws_conn_tray.ssm.os.kill", fake_kill)
 
     ssm_module = __import__("aws_conn_tray.ssm", fromlist=["_cleanup_lingering_sessions"])
+    monkeypatch.setattr(ssm_module, "PSUTIL_AVAILABLE", False)
     ssm_module._cleanup_lingering_sessions("test")
 
     assert (123, ssm.signal.SIGTERM) in calls
@@ -78,6 +79,7 @@ def test_cleanup_lingering_sessions_kills_found_pids(monkeypatch):
 
 
 def test_cleanup_lingering_sessions_windows(monkeypatch):
+    monkeypatch.setattr(ssm_module, "PSUTIL_AVAILABLE", False)
     invoked = []
     monkeypatch.setattr(ssm_module.platforms, "is_windows", lambda: True)
     monkeypatch.setattr(ssm_module.platforms, "is_linux", lambda: False)
