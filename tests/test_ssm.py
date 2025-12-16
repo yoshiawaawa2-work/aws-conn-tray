@@ -1,6 +1,7 @@
 import aws_conn_tray.ssm as ssm
 from aws_conn_tray.ssm import SsmPortForward
 from aws_conn_tray.config_loader import ForwardTarget
+from aws_conn_tray import ssm as ssm_module
 
 
 def test_ssm_start_calls_popen(monkeypatch):
@@ -74,3 +75,39 @@ def test_cleanup_lingering_sessions_kills_found_pids(monkeypatch):
 
     assert (123, ssm.signal.SIGTERM) in calls
     assert (456, ssm.signal.SIGTERM) in calls
+
+
+def test_cleanup_lingering_sessions_windows(monkeypatch):
+    invoked = []
+    monkeypatch.setattr(ssm_module.platforms, "is_windows", lambda: True)
+    monkeypatch.setattr(ssm_module.platforms, "is_linux", lambda: False)
+    monkeypatch.setattr(ssm_module.platforms, "is_macos", lambda: False)
+    monkeypatch.setattr(ssm_module, "log_message", lambda *a, **k: None)
+
+    def fake_run(cmd, capture_output=None, text=None, timeout=None):
+        invoked.append(cmd)
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(ssm_module.subprocess, "run", fake_run)
+
+    ssm_module._cleanup_lingering_sessions("test")
+
+    assert any(cmd and cmd[0] == "taskkill" for cmd in invoked)
+
+
+def test_log_port_occupant_skips_on_non_linux(monkeypatch):
+    monkeypatch.setattr(ssm_module.platforms, "is_linux", lambda: False)
+    called = {}
+
+    def fake_run(*a, **k):
+        called["run"] = True
+        return type("R", (), {"returncode": 1, "stdout": ""})()
+
+    monkeypatch.setattr(ssm_module.subprocess, "run", fake_run)
+
+    ssm_module._log_port_occupant(5432)
+    assert "run" not in called

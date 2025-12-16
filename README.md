@@ -1,7 +1,8 @@
 
 # aws_conn_tray
 
-AWS SSO トークンと SSM ポートフォワード（RDS など）を監視し、トレイアイコンと通知で状態を知らせるデスクトップ常駐アプリです。GUI は wxPython 版のみで、認証画面表示は PySide6 + QtWebEngine のサブプロセスを利用します。
+AWS SSO トークンと SSM ポートフォワード（RDS など）を監視し、トレイアイコンと通知で状態を知らせるデスクトップ常駐アプリです。GUI は wxPython 版のみで、認証画面表示は PySide6 + QtWebEngine のサブプロセスを利用します。  
+Linux / Windows / macOS の 3OS で動作することを目標にしています（自動起動やポート占有調査など一部は OS ごとに手順が異なります）。
 
 ## 主な機能
 - トレイアイコン表示（wxPython）。左右クリックでメニューを開く。
@@ -25,8 +26,11 @@ AWS SSO トークンと SSM ポートフォワード（RDS など）を監視し
 - `icons/*.png` : トレイアイコン。
 - `tests/` : 単体テスト（wx/Qt 依存テストは環境により skip）。
 
-## 前提条件
-- Ubuntu 22.x (GNOME) 想定。macOS/Windows でも wx/PySide が動けば利用可。
+## サポート OS と前提条件
+- OS: Linux (Ubuntu 22.x 想定) / Windows 10+ / macOS 12+  
+  - Linux: systemd ユニットで自動起動可能。ポート占有調査 (`ss`/`lsof`) やプロセス掃除 (`pgrep`) も利用。  
+  - Windows: タスク スケジューラで自動起動を設定してください（ユニットは付属しません）。`taskkill` で残存プロセスを緩やかに終了します。  
+  - macOS: LaunchAgent で自動起動を設定する想定（plist は同梱していません）。プロセス掃除は pgrep 経由で行います。
 - Python 3.10+ 推奨。
 - AWS CLI v2 / Session Manager Plugin がインストール済み。`aws configure sso` を完了していること。
 - 踏み台 EC2 が SSM で到達可能で、そこから対象 DB へ TCP で接続できること。
@@ -69,7 +73,9 @@ PYTHONPATH=. .venv/bin/python tray_app.py
 ```
 トレイにアイコンが出て、右クリックでメニューが開けば OK。
 
-### 5. 自動起動（systemd --user）
+### 5. 自動起動
+
+#### Linux (systemd --user)
 ```bash
 mkdir -p ~/.config/systemd/user
 cp systemd/aws-conn-tray.service ~/.config/systemd/user/
@@ -82,12 +88,32 @@ systemctl --user enable --now aws-conn-tray.service
 systemctl --user disable --now aws-conn-tray.service
 ```
 
+#### Windows (タスク スケジューラ例)
+1. 「タスク スケジューラ」を開き、「基本タスクの作成」。  
+2. トリガーは「ログオン時」。  
+3. 操作は「プログラムの開始」で以下を指定:  
+   - プログラム/スクリプト: `C:\path\to\aws-conn-tray\.venv\Scripts\python.exe`  
+   - 引数の追加: `C:\path\to\aws-conn-tray\tray_app.py`
+4. 実行ユーザーを現在のユーザーにし、必要なら「最上位の特権で実行する」を有効化。
+
+#### macOS (LaunchAgent 例)
+- `~/Library/LaunchAgents/aws.conn.tray.plist` を作成し、`ProgramArguments` に `python3` と `tray_app.py` を記載。  
+- `launchctl load ~/Library/LaunchAgents/aws.conn.tray.plist` で読み込み、`launchctl start ...` で起動。plist 雛形は環境に合わせて用意してください。
+
 ### 6. アンインストール
+#### Linux
 ```bash
 systemctl --user disable --now aws-conn-tray.service
 rm -rf ~/aws-conn-tray ~/.cache/aws_conn_tray
 rm ~/.config/systemd/user/aws-conn-tray.service
 ```
+#### Windows
+- タスク スケジューラからタスクを削除。
+- インストールディレクトリ（例: `C:\aws-conn-tray`）と `C:\Users\<you>\.cache\aws_conn_tray` を削除。
+
+#### macOS
+- `launchctl unload ~/Library/LaunchAgents/aws.conn.tray.plist`
+- インストールディレクトリと `~/.cache/aws_conn_tray` を削除。
 
 ## 動作のポイント
 - SSO トークン失効時は右下にミニダイアログが出て「開く」から WebView/ブラウザで再ログインできます。

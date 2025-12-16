@@ -335,6 +335,38 @@ def test_open_pywebview_authorize(monkeypatch):
     assert env.get("QT_OPENGL") == "software"
 
 
+def test_open_qt_webview_authorize_env_windows(monkeypatch):
+    # Windows/非Linux 想定では Qt 環境変数を強制しない
+    monkeypatch.setattr(wx_tray.platforms, "is_linux", lambda: False)
+    created = {}
+
+    class DummyProc:
+        def __init__(self):
+            self._rc = None
+            self.returncode = None
+        def poll(self):
+            return self._rc
+        def communicate(self, timeout=None):
+            self._rc = 0
+            self.returncode = 0
+            return ("", "")
+
+    def fake_popen(args, stdout=None, stderr=None, text=None, env=None):
+        created["env"] = env
+        return DummyProc()
+
+    monkeypatch.setattr(wx_tray.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(wx_tray, "log_message", lambda *a, **k: None)
+    monkeypatch.setattr(wx_tray, "cleanup_qt_webview_procs", lambda force=False: None)
+    monkeypatch.setattr(wx_tray.webbrowser, "open", lambda url: created.setdefault("opened", url))
+
+    ok = wx_tray.open_qt_webview_authorize("https://example.com/auth", storage_dir="/tmp/webview")
+
+    assert ok is True
+    assert created["env"] is not None
+    assert "QTWEBENGINE_CHROMIUM_FLAGS" not in created["env"]
+
+
 def _bare_app():
     app = wx_tray.WxTrayApp.__new__(wx_tray.WxTrayApp)
     app.tray_icon = type("T", (), {"set_icon_color": lambda self, c: None, "forward_statuses": {}})()

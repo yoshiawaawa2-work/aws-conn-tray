@@ -7,6 +7,7 @@ from typing import List, Tuple
 from .config_loader import ForwardTarget
 
 from .logger import notify, log_message
+from . import platforms
 
 
 def check_profile_config(profile: str) -> List[str]:
@@ -112,8 +113,6 @@ def _run_command(cmd: list, timeout: int = 5) -> Tuple[int, str, str]:
 
 
 def ensure_supported_os():
-    import sys
-
-    if sys.platform not in ("linux", "linux2", "win32", "darwin"):
+    if not platforms.is_supported_os():
         notify("非対応OS", "このアプリは Linux / Windows / macOS に対応しています。")
         raise SystemExit(1)
