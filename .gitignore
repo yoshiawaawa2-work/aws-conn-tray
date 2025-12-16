@@ -15,6 +15,7 @@ config/config.json
 .coverage
 .pytest_cache/
 .mypy_cache/
+build/
 
 # IDE/エディタ
 .vscode/
