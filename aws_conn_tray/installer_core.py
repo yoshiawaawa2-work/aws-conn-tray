@@ -224,6 +224,28 @@ def create_zip(src_root: Path, build_dir: Path, zip_name: str = "aws-conn-tray-i
     return zip_path
 
 
+def create_build_tree(src_root: Path, build_dir: Path, dist_name: str = "aws-conn-tray") -> Path:
+    """
+    配布用の展開ディレクトリを build_dir に作成する。build_dir/dist_name を返す。
+    """
+    build_dir.mkdir(parents=True, exist_ok=True)
+    dist_dir = build_dir / dist_name
+    if dist_dir.exists():
+        shutil.rmtree(dist_dir)
+    dist_dir.mkdir(parents=True, exist_ok=True)
+    for path in src_root.rglob("*"):
+        if build_dir in path.parents:
+            continue
+        rel = path.relative_to(src_root)
+        dst = dist_dir / rel
+        if path.is_dir():
+            dst.mkdir(parents=True, exist_ok=True)
+        else:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, dst)
+    return dist_dir
+
+
 # ===== インストール・アンインストール スケルトン =====
 
 
@@ -263,3 +285,107 @@ def uninstall_app(install_dir: Path, shortcuts_dir: Optional[Path] = None) -> No
         if maybe:
             shutil.rmtree(maybe, ignore_errors=True)
     shutil.rmtree(install_dir, ignore_errors=True)
+
+
+# ===== 自動起動登録/解除 =====
+
+
+def enable_autostart(install_dir: Path, dry_run: bool = False, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> List[List[str]]:
+    cmds: List[List[str]] = []
+    if platforms.is_windows():
+        exe = str(Path(sys.executable or "python").resolve())
+        task_cmd = [
+            "schtasks",
+            "/Create",
+            "/TN",
+            "AWS Conn Tray",
+            "/SC",
+            "ONLOGON",
+            "/TR",
+            f'"{exe}" "{install_dir / "tray_app.py"}"',
+        ]
+        cmds.append(task_cmd)
+    elif platforms.is_macos():
+        plist = Path.home() / "Library" / "LaunchAgents" / "aws.conn.tray.plist"
+        cmds.append(["launchctl", "load", str(plist)])
+    else:
+        cmds.append(["systemctl", "--user", "enable", "--now", "aws-conn-tray.service"])
+
+    executed: List[List[str]] = []
+    if dry_run:
+        return cmds
+    for cmd in cmds:
+        try:
+            runner(cmd, check=False)
+            executed.append(cmd)
+        except Exception:
+            executed.append(cmd)
+    return executed
+
+
+def disable_autostart(dry_run: bool = False, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> List[List[str]]:
+    cmds: List[List[str]] = []
+    if platforms.is_windows():
+        cmds.append(["schtasks", "/Delete", "/TN", "AWS Conn Tray", "/F"])
+    elif platforms.is_macos():
+        plist = Path.home() / "Library" / "LaunchAgents" / "aws.conn.tray.plist"
+        cmds.append(["launchctl", "unload", str(plist)])
+    else:
+        cmds.append(["systemctl", "--user", "disable", "--now", "aws-conn-tray.service"])
+
+    executed: List[List[str]] = []
+    if dry_run:
+        return cmds
+    for cmd in cmds:
+        try:
+            runner(cmd, check=False)
+            executed.append(cmd)
+        except Exception:
+            executed.append(cmd)
+    return executed
+
+
+# ===== インストールフロー（UI/CLI 共通で利用できるようにまとめる） =====
+
+
+@dataclass
+class InstallOptions:
+    install_dir: Path
+    config_source: Optional[Path] = None
+    use_example_config: bool = True
+    autostart: bool = True
+    shortcuts_dir: Optional[Path] = None
+    auto_install_missing: bool = False
+    preview: bool = False
+
+
+@dataclass
+class InstallResult:
+    ok: bool
+    issues: List[str] = field(default_factory=list)
+    entries: List[Path] = field(default_factory=list)
+    executed_commands: List[List[str]] = field(default_factory=list)
+
+
+def perform_install(opts: InstallOptions, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> InstallResult:
+    issues: List[str] = []
+    executed: List[List[str]] = []
+    pre = preinstall_check()
+    if not pre.ok:
+        if opts.auto_install_missing and pre.suggested_installs:
+            run_commands(pre.suggested_installs, runner=runner)
+            pre = preinstall_check()
+        if not pre.ok:
+            return InstallResult(ok=False, issues=pre.issues, entries=[], executed_commands=executed)
+
+    if opts.preview:
+        return InstallResult(ok=True, issues=[], entries=[], executed_commands=pre.suggested_installs)
+
+    entries = install_app(
+        opts.install_dir,
+        shortcuts_dir=opts.shortcuts_dir,
+        config_source=None if opts.use_example_config else opts.config_source,
+    )
+    if opts.autostart:
+        executed.extend(enable_autostart(opts.install_dir, dry_run=False, runner=runner))
+    return InstallResult(ok=True, issues=issues, entries=entries, executed_commands=executed)
