@@ -1,48 +1,23 @@
 """
-PySimpleGUI ベースの簡易インストーラ UI。
-- --preview / --dry-run でファイルコピーや自動起動登録を行わずに画面確認のみ可能。
-- --headless で GUI を出さずに指定オプションでインストールを試行。
+Tkinter ベースの簡易インストーラ UI。
+- --preview / --headless オプションで、実処理なしの確認や CLI 実行が可能。
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+import tkinter as tk
+from tkinter import filedialog, messagebox
 from pathlib import Path
 from typing import Optional
-
-import PySimpleGUI as sg
 
 from aws_conn_tray import installer_core
 
 
-def build_layout(default_install: Path) -> list:
-    return [
-        [sg.Text("インストール先"), sg.Input(str(default_install), key="install_dir", size=(50, 1)), sg.FolderBrowse("参照")],
-        [sg.Checkbox("ログイン時に自動起動を登録する", key="autostart", default=True)],
-        [sg.Checkbox("自動起動登録のみを実行（解除は下記で可能）", key="autostart_only", default=False)],
-        [sg.Frame("設定ファイル", [
-            [sg.Radio("サンプルから生成", "cfgsrc", key="cfg_sample", default=True)],
-            [sg.Radio("既存 config.json を指定", "cfgsrc", key="cfg_import", default=False), sg.Input(key="cfg_path", size=(45, 1)), sg.FileBrowse("参照")],
-        ])],
-        [sg.Checkbox("前提が足りない場合に推奨コマンドを自動実行（自己責任）", key="auto_install_missing", default=False)],
-        [sg.HorizontalSeparator()],
-        [sg.Button("インストール", bind_return_key=True), sg.Button("プレビュー", key="preview"), sg.Button("自動起動解除", key="disable_autostart"), sg.Button("キャンセル")],
-        [sg.Multiline("", key="log", size=(70, 10), disabled=True)],
-    ]
-
-
-def _append_log(window: sg.Window, message: str):
-    try:
-        prev = window["log"].get()
-        window["log"].update(prev + message + "\n")
-    except Exception:
-        pass
-
-
 def _parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--preview", action="store_true", help="処理を実行せず画面だけ確認")
+    p.add_argument("--preview", action="store_true", help="処理を実行せずプレビューのみ")
     p.add_argument("--headless", action="store_true", help="GUI を出さずに実行")
     p.add_argument("--install-dir", default=None)
     p.add_argument("--config", default=None, help="既存 config.json のパス")
@@ -68,9 +43,9 @@ def perform(opts, preview: bool) -> installer_core.InstallResult:
 def run_headless(args):
     res = perform(args, preview=args.preview)
     if res.ok:
-        print("インストール完了（プレビュー）" if args.preview else "インストール完了")
+        print("プレビュー完了" if args.preview else "インストール完了")
     else:
-        print("インストール失敗:")
+        print("前提条件エラー:")
         for issue in res.issues:
             print(" -", issue)
     return 0 if res.ok else 1
@@ -78,46 +53,75 @@ def run_headless(args):
 
 def run_gui(args):
     defaults = installer_core.default_paths()
-    layout = build_layout(defaults["install"])
-    window = sg.Window("aws-conn-tray インストーラ", layout)
+    root = tk.Tk()
+    root.title("aws-conn-tray インストーラ")
 
-    while True:
-        event, values = window.read()
-        if event in (sg.WINDOW_CLOSED, "キャンセル"):
-            break
-        preview = event == "プレビュー" or args.preview
-        if event == "自動起動解除":
-            cmds = installer_core.disable_autostart(dry_run=preview)
-            msg = "自動起動解除を実行しました。" if not preview else "自動起動解除コマンド（プレビュー）: " + " | ".join(" ".join(c) for c in cmds)
-            sg.popup_ok(msg, keep_on_top=True)
-            _append_log(window, msg)
-            continue
-        if event in ("インストール", "プレビュー"):
-            install_dir = values.get("install_dir") or str(defaults["install"])
-            cfg_import = values.get("cfg_import")
-            cfg_path = Path(values.get("cfg_path")) if cfg_import and values.get("cfg_path") else None
-            opts = argparse.Namespace(
-                install_dir=install_dir,
-                config=str(cfg_path) if cfg_path else None,
-                no_autostart=not values.get("autostart", True),
-                auto_install_missing=values.get("auto_install_missing", False),
-            )
-            if values.get("autostart_only"):
-                cmds = installer_core.enable_autostart(Path(install_dir), dry_run=preview)
-                msg = "自動起動登録のみ実行しました。" if not preview else "自動起動登録コマンド（プレビュー）: " + " | ".join(" ".join(c) for c in cmds)
-                sg.popup_ok(msg, keep_on_top=True)
-                _append_log(window, msg)
-                continue
-            res = perform(opts, preview=preview)
-            if res.ok:
-                msg = "プレビュー完了（実際のコピーや自動起動登録は行っていません）" if preview else "インストールが完了しました。"
-                sg.popup_ok(msg, keep_on_top=True)
-                _append_log(window, msg)
-            else:
-                sg.popup_error("前提条件エラー:\n" + "\n".join(res.issues), keep_on_top=True)
-                _append_log(window, "\n".join(res.issues))
+    install_var = tk.StringVar(value=str(defaults["install"]))
+    autostart_var = tk.BooleanVar(value=True)
+    autostart_only_var = tk.BooleanVar(value=False)
+    auto_install_missing_var = tk.BooleanVar(value=False)
+    cfg_mode_var = tk.StringVar(value="sample")
+    cfg_path_var = tk.StringVar(value="")
 
-    window.close()
+    tk.Label(root, text="インストール先").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+    tk.Entry(root, textvariable=install_var, width=50).grid(row=0, column=1, padx=5, pady=5)
+    tk.Button(root, text="参照", command=lambda: install_var.set(filedialog.askdirectory() or install_var.get())).grid(row=0, column=2, padx=5, pady=5)
+
+    tk.Checkbutton(root, text="ログイン時に自動起動を登録する", variable=autostart_var).grid(row=1, column=0, columnspan=3, sticky="w", padx=5)
+    tk.Checkbutton(root, text="自動起動登録のみを実行", variable=autostart_only_var).grid(row=2, column=0, columnspan=3, sticky="w", padx=5)
+
+    frame_cfg = tk.LabelFrame(root, text="設定ファイル")
+    frame_cfg.grid(row=3, column=0, columnspan=3, sticky="we", padx=5, pady=5)
+    tk.Radiobutton(frame_cfg, text="サンプルから生成", variable=cfg_mode_var, value="sample").grid(row=0, column=0, sticky="w")
+    tk.Radiobutton(frame_cfg, text="既存 config.json を指定", variable=cfg_mode_var, value="import").grid(row=1, column=0, sticky="w")
+    tk.Entry(frame_cfg, textvariable=cfg_path_var, width=45).grid(row=1, column=1, padx=5, pady=3)
+    tk.Button(frame_cfg, text="参照", command=lambda: cfg_path_var.set(filedialog.askopenfilename(filetypes=[("JSON", "*.json")]) or cfg_path_var.get())).grid(row=1, column=2, padx=5)
+
+    tk.Checkbutton(root, text="前提不足時に推奨コマンドを自動実行（自己責任）", variable=auto_install_missing_var).grid(row=4, column=0, columnspan=3, sticky="w", padx=5)
+
+    log_text = tk.Text(root, height=10, width=70, state="disabled")
+    log_text.grid(row=6, column=0, columnspan=3, padx=5, pady=5)
+
+    def append_log(msg: str):
+        log_text.configure(state="normal")
+        log_text.insert("end", msg + "\n")
+        log_text.see("end")
+        log_text.configure(state="disabled")
+
+    def do_install(preview: bool):
+        cfg_path = cfg_path_var.get() if cfg_mode_var.get() == "import" else None
+        opts = argparse.Namespace(
+            install_dir=install_var.get(),
+            config=cfg_path,
+            no_autostart=not autostart_var.get(),
+            auto_install_missing=auto_install_missing_var.get(),
+        )
+        if autostart_only_var.get():
+            cmds = installer_core.enable_autostart(Path(install_var.get()), dry_run=preview)
+            msg = "自動起動登録のみ実行しました。" if not preview else "自動起動登録コマンド（プレビュー）: " + " | ".join(" ".join(c) for c in cmds)
+            messagebox.showinfo("完了", msg)
+            append_log(msg)
+            return
+        res = perform(opts, preview=preview)
+        if res.ok:
+            msg = "プレビュー完了" if preview else "インストールが完了しました。"
+            messagebox.showinfo("完了", msg)
+            append_log(msg)
+        else:
+            messagebox.showerror("エラー", "\n".join(res.issues))
+            append_log("\n".join(res.issues))
+
+    def do_disable(preview: bool):
+        cmds = installer_core.disable_autostart(dry_run=preview)
+        msg = "自動起動解除を実行しました。" if not preview else "自動起動解除コマンド（プレビュー）: " + " | ".join(" ".join(c) for c in cmds)
+        messagebox.showinfo("完了", msg)
+        append_log(msg)
+
+    tk.Button(root, text="インストール", command=lambda: do_install(preview=False)).grid(row=5, column=0, padx=5, pady=5, sticky="we")
+    tk.Button(root, text="プレビュー", command=lambda: do_install(preview=True)).grid(row=5, column=1, padx=5, pady=5, sticky="we")
+    tk.Button(root, text="自動起動解除", command=lambda: do_disable(preview=False)).grid(row=5, column=2, padx=5, pady=5, sticky="we")
+
+    root.mainloop()
 
 
 def main():
