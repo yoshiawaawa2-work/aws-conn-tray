@@ -75,8 +75,16 @@ def _get_sso_profiles(config_path: Optional[Path] = None) -> List[str]:
     try:
         import configparser
 
-        parser = configparser.ConfigParser()
+        parser = configparser.RawConfigParser(interpolation=None)
         parser.read(cfg_path, encoding="utf-8")
+        sessions: Dict[str, Dict[str, str]] = {}
+        for section in parser.sections():
+            if section.startswith("sso-session"):
+                name = section.replace("sso-session ", "").strip()
+                sessions[name] = {
+                    "sso_start_url": parser.get(section, "sso_start_url", fallback=""),
+                    "sso_region": parser.get(section, "sso_region", fallback=""),
+                }
         for section in parser.sections():
             if section == "default":
                 prof = "default"
@@ -84,11 +92,62 @@ def _get_sso_profiles(config_path: Optional[Path] = None) -> List[str]:
                 prof = section.replace("profile ", "", 1)
             else:
                 continue
-            if parser.get(section, "sso_start_url", fallback="") and parser.get(section, "sso_region", fallback=""):
+            start_url = parser.get(section, "sso_start_url", fallback="")
+            sso_region = parser.get(section, "sso_region", fallback="")
+            sso_session = parser.get(section, "sso_session", fallback="")
+            if not start_url and sso_session:
+                sess = sessions.get(sso_session)
+                if sess:
+                    start_url = sess.get("sso_start_url", "")
+                    sso_region = sso_region or sess.get("sso_region", "")
+            if start_url and sso_region:
                 profiles.append(prof)
     except Exception:
         pass
     return profiles
+
+
+def _load_sso_profile_config(profile: str, config_path: Optional[Path] = None) -> Dict[str, str]:
+    """
+    プロファイルの SSO 設定を取得する。sso_session 経由の場合もセッションを解決して返す。
+    戻り値: {"sso_start_url":..., "sso_region":..., "sso_account_id":..., "sso_role_name":..., "sso_session":...}
+    """
+    cfg_path = Path(config_path) if config_path else Path(os.environ.get("AWS_CONFIG_FILE", Path.home() / ".aws" / "config"))
+    if not cfg_path.exists() or not profile:
+        return {}
+    try:
+        import configparser
+
+        parser = configparser.RawConfigParser(interpolation=None)
+        parser.read(cfg_path, encoding="utf-8")
+        sessions: Dict[str, Dict[str, str]] = {}
+        for section in parser.sections():
+            if section.startswith("sso-session"):
+                name = section.replace("sso-session ", "").strip()
+                sessions[name] = {
+                    "sso_start_url": parser.get(section, "sso_start_url", fallback=""),
+                    "sso_region": parser.get(section, "sso_region", fallback=""),
+                }
+        section = "default" if profile == "default" else f"profile {profile}"
+        if section not in parser:
+            return {}
+        sso_session = parser.get(section, "sso_session", fallback="")
+        start_url = parser.get(section, "sso_start_url", fallback="")
+        sso_region = parser.get(section, "sso_region", fallback="")
+        if not start_url and sso_session:
+            sess = sessions.get(sso_session)
+            if sess:
+                start_url = sess.get("sso_start_url", "")
+                sso_region = sso_region or sess.get("sso_region", "")
+        return {
+            "sso_start_url": start_url,
+            "sso_region": sso_region,
+            "sso_account_id": parser.get(section, "sso_account_id", fallback=""),
+            "sso_role_name": parser.get(section, "sso_role_name", fallback=""),
+            "sso_session": sso_session,
+        }
+    except Exception:
+        return {}
 
 
 def _ensure_supported_os(args) -> bool:
@@ -540,6 +599,8 @@ class InstallerWizard:
         dialog = tk.Toplevel(self.root)
         dialog.title("aws configure sso")
         entries = {}
+        current_profile = self.sso_profile_var.get().strip() or "default"
+        current_cfg = _load_sso_profile_config(current_profile)
 
         def add_field(label, key, default=""):
             row = tk.Frame(dialog)
@@ -549,11 +610,12 @@ class InstallerWizard:
             entries[key] = var
             tk.Entry(row, textvariable=var, width=40).pack(side="left")
 
-        add_field("プロファイル名", "profile", self.sso_profile_var.get() or "default")
-        add_field("SSO Start URL", "sso_start_url", "")
-        add_field("SSO リージョン", "sso_region", "")
-        add_field("SSO アカウントID", "sso_account_id", "")
-        add_field("SSO ロール名", "sso_role_name", "")
+        add_field("プロファイル名", "profile", current_profile or "default")
+        add_field("SSO Start URL", "sso_start_url", current_cfg.get("sso_start_url", ""))
+        add_field("SSO リージョン", "sso_region", current_cfg.get("sso_region", ""))
+        add_field("SSO アカウントID", "sso_account_id", current_cfg.get("sso_account_id", ""))
+        add_field("SSO ロール名", "sso_role_name", current_cfg.get("sso_role_name", ""))
+        existing_session = current_cfg.get("sso_session", "")
 
         log = tk.Text(dialog, height=8, width=60, state="disabled")
         log.pack(padx=10, pady=5)
@@ -581,6 +643,8 @@ class InstallerWizard:
                 parser.add_section(section)
             parser.set(section, "sso_start_url", entries["sso_start_url"].get().strip())
             parser.set(section, "sso_region", entries["sso_region"].get().strip())
+            if existing_session:
+                parser.set(section, "sso_session", existing_session)
             if entries["sso_account_id"].get().strip():
                 parser.set(section, "sso_account_id", entries["sso_account_id"].get().strip())
             if entries["sso_role_name"].get().strip():
