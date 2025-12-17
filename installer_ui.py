@@ -115,6 +115,21 @@ def _load_sso_profile_config(profile: str, config_path: Optional[Path] = None) -
     cfg_path = Path(config_path) if config_path else Path(os.environ.get("AWS_CONFIG_FILE", Path.home() / ".aws" / "config"))
     if not cfg_path.exists() or not profile:
         return {}
+
+
+def _suggest_new_profile_name(existing: List[str]) -> str:
+    """
+    既存プロファイル一覧を元に、新規作成時のデフォルト名を返す。
+    default が空いていれば default、それ以外は profile-1,2,... を採番。
+    """
+    if "default" not in existing:
+        return "default"
+    i = 1
+    while True:
+        cand = f"profile-{i}"
+        if cand not in existing:
+            return cand
+        i += 1
     try:
         import configparser
 
@@ -635,6 +650,17 @@ class InstallerWizard:
             if not profile:
                 messagebox.showerror("入力エラー", "プロファイル名を入力してください。")
                 return False
+            # 必須チェック
+            required_fields = {
+                "SSO Start URL": entries["sso_start_url"].get().strip(),
+                "SSO リージョン": entries["sso_region"].get().strip(),
+                "SSO アカウントID": entries["sso_account_id"].get().strip(),
+                "SSO ロール名": entries["sso_role_name"].get().strip(),
+            }
+            missing = [k for k, v in required_fields.items() if not v]
+            if missing:
+                messagebox.showerror("入力エラー", "必須項目が未入力です: " + ", ".join(missing))
+                return False
             cfg_path = Path.home() / ".aws" / "config"
             cfg_path.parent.mkdir(parents=True, exist_ok=True)
             import configparser
@@ -643,6 +669,9 @@ class InstallerWizard:
             if cfg_path.exists():
                 parser.read(cfg_path, encoding="utf-8")
             section = "default" if profile == "default" else f"profile {profile}"
+            exists = section in parser
+            if exists and messagebox.askokcancel("確認", f"{profile} は既に存在します。上書きしますか？") is False:
+                return False
             if section not in parser:
                 parser.add_section(section)
             parser.set(section, "sso_start_url", entries["sso_start_url"].get().strip())
@@ -674,7 +703,10 @@ class InstallerWizard:
 
         def on_new_profile():
             for key in ["profile", "sso_start_url", "sso_region", "sso_account_id", "sso_role_name"]:
-                entries[key].set("" if key != "profile" else "default")
+                if key == "profile":
+                    entries[key].set(_suggest_new_profile_name(self.sso_profiles))
+                else:
+                    entries[key].set("")
             mode_var.set("新規プロファイルを作成")
             log_line("新規プロファイル作成モードです。")
 
