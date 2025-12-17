@@ -602,8 +602,8 @@ class InstallerWizard:
         current_profile = self.sso_profile_var.get().strip() or "default"
         current_cfg = _load_sso_profile_config(current_profile)
 
-        mode_text = "既存プロファイルを編集" if current_cfg else "新規プロファイルを作成"
-        tk.Label(dialog, text=mode_text, fg="blue").pack(anchor="w", padx=10, pady=4)
+        mode_var = tk.StringVar(value="既存プロファイルを編集" if current_cfg else "新規プロファイルを作成")
+        tk.Label(dialog, textvariable=mode_var, fg="blue").pack(anchor="w", padx=10, pady=4)
 
         def add_field(label, key, default=""):
             row = tk.Frame(dialog)
@@ -631,16 +631,15 @@ class InstallerWizard:
             log.see("end")
             log.configure(state="disabled")
 
-        def on_save_and_login():
-            profile = entries["profile"].get().strip()
+        def _write_profile(profile: str):
             if not profile:
                 messagebox.showerror("入力エラー", "プロファイル名を入力してください。")
-                return
+                return False
             cfg_path = Path.home() / ".aws" / "config"
             cfg_path.parent.mkdir(parents=True, exist_ok=True)
             import configparser
 
-            parser = configparser.ConfigParser()
+            parser = configparser.RawConfigParser(interpolation=None)
             if cfg_path.exists():
                 parser.read(cfg_path, encoding="utf-8")
             section = "default" if profile == "default" else f"profile {profile}"
@@ -658,6 +657,7 @@ class InstallerWizard:
                 parser.write(f)
             log_line(f"~/.aws/config に {section} を保存しました。")
             self.sso_profile_var.set(profile)
+            self.state["sso_login_ok"] = False  # 保存だけの場合は未ログイン扱い
             # プロファイル一覧を更新
             self.sso_profiles = _get_sso_profiles()
             if hasattr(self, "sso_profile_cb"):
@@ -670,7 +670,24 @@ class InstallerWizard:
                 vars_map = first if isinstance(first, dict) and "vars" not in first else first.get("vars", first)
                 if "profile" in vars_map and not vars_map["profile"].get().strip():
                     vars_map["profile"].set(profile)
+            return True
 
+        def on_new_profile():
+            for key in ["profile", "sso_start_url", "sso_region", "sso_account_id", "sso_role_name"]:
+                entries[key].set("" if key != "profile" else "default")
+            mode_var.set("新規プロファイルを作成")
+            log_line("新規プロファイル作成モードです。")
+
+        def on_save_only():
+            profile = entries["profile"].get().strip()
+            if _write_profile(profile):
+                log_line("保存しました（ログインは未実施）。")
+                self._run_precheck()
+
+        def on_save_and_login():
+            profile = entries["profile"].get().strip()
+            if not _write_profile(profile):
+                return
             # aws sso login を実行（ブラウザはユーザー任せ）
             cmd = ["aws", "sso", "login", "--profile", profile]
             log_line("aws sso login を実行しています...")
@@ -691,6 +708,8 @@ class InstallerWizard:
 
         btn_row = tk.Frame(dialog)
         btn_row.pack(pady=5)
+        tk.Button(btn_row, text="新規作成", command=on_new_profile).pack(side="left", padx=5)
+        tk.Button(btn_row, text="保存", command=on_save_only).pack(side="left", padx=5)
         tk.Button(btn_row, text="設定してログイン", command=on_save_and_login).pack(side="left", padx=5)
         tk.Button(btn_row, text="閉じる", command=dialog.destroy).pack(side="left", padx=5)
 
