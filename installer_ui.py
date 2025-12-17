@@ -278,6 +278,7 @@ class InstallerWizard:
         self.next_button: Optional[tk.Button] = None
         self.nav_frame: Optional[tk.Frame] = None
         self.sso_profiles: List[str] = _get_sso_profiles()
+        self.sso_status_var: Optional[tk.StringVar] = None
         self._build_steps()
         self._show_step(0)
 
@@ -297,7 +298,9 @@ class InstallerWizard:
         tk.Label(frame, text="ようこそ", font=("Arial", 14, "bold")).pack(anchor="w", padx=10, pady=5)
         self.precheck_text = tk.Text(frame, height=8, width=70, state="disabled")
         self.precheck_text.pack(padx=10, pady=5)
-        tk.Label(frame, text="SSO ログインが完了していない場合、次へ進めません。", fg="red").pack(anchor="w", padx=10, pady=(0, 4))
+        self.sso_status_var = tk.StringVar(value="SSO ログインが完了していない場合、次へ進めません。")
+        self.sso_status_label = tk.Label(frame, textvariable=self.sso_status_var, fg="red")
+        self.sso_status_label.pack(anchor="w", padx=10, pady=(0, 4))
         tk.Label(frame, text="※ SSO設定画面で「ログイン」に成功してから続行してください。", fg="red").pack(anchor="w", padx=10, pady=(0, 6))
         tk.Button(
             frame,
@@ -353,6 +356,7 @@ class InstallerWizard:
                 if not self.state.get("aws_ok", False):
                     cb_state = "disabled"
                 self.sso_profile_cb.config(state=cb_state, values=self.sso_profiles)
+        self._update_sso_status_label()
 
     def _build_path_autostart(self) -> tk.Frame:
         frame = tk.Frame(self.content)
@@ -595,7 +599,21 @@ class InstallerWizard:
                 state = "normal"
                 if self.current_step == 0 and not self.state.get("precheck_ok", False):
                     state = "disabled"
+                if self.current_step == 0 and self.state.get("sso_profile") and not self.state.get("sso_login_ok"):
+                    state = "disabled"
                 self.next_button.config(text="次へ", state=state)
+
+    def _update_sso_status_label(self):
+        if not getattr(self, "sso_status_var", None):
+            return
+        if self.state.get("sso_login_ok"):
+            self.sso_status_var.set("SSO ログイン済みです。")
+            if hasattr(self, "sso_status_label"):
+                self.sso_status_label.config(fg="green")
+        else:
+            self.sso_status_var.set("SSO ログインが完了していない場合、次へ進めません。")
+            if hasattr(self, "sso_status_label"):
+                self.sso_status_label.config(fg="red")
 
     # --- インストール処理 ---
     def _start_install(self):
@@ -794,6 +812,7 @@ class InstallerWizard:
                 if proc.returncode == 0:
                     log_line("SSO ログインが完了しました。")
                     self.state["sso_login_ok"] = True
+                    self._update_sso_status_label()
                 else:
                     log_line(f"SSO ログインに失敗しました (rc={proc.returncode})")
             except Exception as e:
