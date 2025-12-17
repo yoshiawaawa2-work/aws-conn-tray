@@ -260,6 +260,12 @@ def run_headless(args):
 
 
 class InstallerWizard:
+    """
+    Tk ベースのフル機能インストーラウィザード。
+    - ステップ: ようこそ/前提チェック → インストール先/自動起動 → 設定編集 → 確認 → 進捗 → 完了
+    - preview=True でファイルを書かずに動作確認、simulate_precheck_fail で前提不足をテスト可能
+    - SSO プロファイル選択・ログイン連携、設定保存、本体再起動などを統合
+    """
     def __init__(self, root: tk.Tk, preview: bool = False, simulate_precheck_fail: bool = False, sso_profile: Optional[str] = None):
         self.root = root
         self.root.title("aws-conn-tray インストーラ")
@@ -963,6 +969,11 @@ class InstallerWizard:
 
 
 def run_gui(args):
+    """
+    Tk ウィザードを起動するエントリポイント。
+    - OS 非対応なら即終了
+    - ナビゲーションボタンを下部固定でセットし、キャンセル時は確認ダイアログを出す
+    """
     if not _ensure_supported_os(args):
         return 1
     root = tk.Tk()
@@ -985,6 +996,9 @@ def run_gui(args):
 
 
 def main():
+    """
+    CLI 入口。--headless のときは非 GUI で実行し、通常は Tk ウィザードを起動。
+    """
     args = _parse_args()
     if args.headless:
         sys.exit(run_headless(args))

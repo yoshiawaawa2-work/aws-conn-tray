@@ -79,6 +79,12 @@ def run_headless(args) -> int:
 
 
 class UninstallWizard:
+    """
+    Tk ベースのアンインストーラ画面。
+    - 4 ステップ（ようこそ/確認/進捗/完了）を順に表示
+    - メタデータが存在する場合は install/shortcuts パスをロックして編集不可にする
+    - preview=True の場合は削除せず、対象とコマンドのみ表示
+    """
     def __init__(self, root: tk.Tk, preview: bool = False, install_arg: Optional[str] = None, shortcuts_arg: Optional[str] = None):
         self.root = root
         self.root.title("aws-conn-tray アンインストーラ")

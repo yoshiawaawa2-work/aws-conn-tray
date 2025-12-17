@@ -1,3 +1,8 @@
+"""
+シンプルな GUI インストーラ（旧版）。
+installer_ui.py に比べて機能は限定的だが、基本的なコピーと config 生成を行う。
+"""
+
 import json
 import os
 import shutil
@@ -14,12 +19,20 @@ SUPPORTED_PLATFORMS = ("linux", "linux2", "win32")
 
 
 def ensure_supported_os():
+    """
+    対応 OS 以外で動かないよう起動直後にチェックする。
+    GUI ポップアップで理由を示し、即終了。
+    """
     if sys.platform not in SUPPORTED_PLATFORMS:
         sg.popup_error("OSが対応していません。Linux または Windows で実行してください。", keep_on_top=True)
         sys.exit(1)
 
 
 def default_install_dir() -> str:
+    """
+    OS ごとのデフォルトインストール先を返す。
+    Windows はシステムドライブ直下、Linux はホーム直下。
+    """
     if sys.platform.startswith("win"):
         drive = os.environ.get("SystemDrive", "C:")
         return os.path.join(drive, "aws-conn-tray")
@@ -27,6 +40,10 @@ def default_install_dir() -> str:
 
 
 def build_layout(default_dir: str) -> list:
+    """
+    最低限の設定を入力するシンプルなレイアウトを組み立てる。
+    新版インストーラ (installer_ui.py) に比べて項目は最小限。
+    """
     return [
         [sg.Text("インストール先"), sg.Input(default_dir, key="install_dir", size=(50, 1)), sg.FolderBrowse("参照")],
         [sg.Text("フォワード名"), sg.Input("rds", key="forward_name", size=(30, 1))],
@@ -43,6 +60,10 @@ def build_layout(default_dir: str) -> list:
 
 
 def gather_values(values: Dict[str, str]) -> Tuple[bool, Dict[str, str]]:
+    """
+    入力値を検証し、型変換した dict を返す。
+    未入力があればエラーを表示し False を返す。
+    """
     required_fields = ["install_dir", "forward_name", "instance_id", "profile", "region", "remote_host", "sso_start_url"]
     missing = [f for f in required_fields if not values.get(f)]
     if missing:
@@ -63,6 +84,10 @@ def gather_values(values: Dict[str, str]) -> Tuple[bool, Dict[str, str]]:
 
 
 def write_config(install_dir: str, config_data: Dict[str, str]) -> None:
+    """
+    入力値をもとに config/config.json を生成する。
+    forwards は 1 件のみを前提としたシンプルな構造。
+    """
     config_dir = os.path.join(install_dir, "config")
     os.makedirs(config_dir, exist_ok=True)
     config_path = os.path.join(config_dir, "config.json")
@@ -89,6 +114,9 @@ def write_config(install_dir: str, config_data: Dict[str, str]) -> None:
 
 
 def copy_app_files(src_root: str, dest_root: str) -> None:
+    """
+    アプリ本体を丸ごとコピーする（隠し/キャッシュ/venv は除外）。
+    """
     def _ignore(dirpath, contents):
         ignore_list = {".git", ".venv", "__pycache__", ".mypy_cache", ".pytest_cache", ".gitignore"}
         return ignore_list.intersection(contents)
@@ -106,6 +134,11 @@ def copy_app_files(src_root: str, dest_root: str) -> None:
 
 
 def main():
+    """
+    旧版 GUI インストールのメインループ。
+    - 入力を受けて config を生成し、簡易なパッケージコピーを行う。
+    - 事前チェックや自動起動などは行わないため、フル機能版は installer_ui.py を使用。
+    """
     ensure_supported_os()
 
     src_root = os.path.dirname(os.path.abspath(__file__))

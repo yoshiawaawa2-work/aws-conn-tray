@@ -14,6 +14,10 @@ from aws_conn_tray import installer_core
 
 
 def _parse_args(argv=None):
+    """
+    CLI オプションを定義する。
+    preview を指定すると実際の削除は行わず、対象とコマンドのみ表示する。
+    """
     p = argparse.ArgumentParser(description="aws-conn-tray アンインストーラ")
     p.add_argument("--install-dir", help="インストール先のルートパス（省略時はデフォルト）")
     p.add_argument("--shortcuts-dir", help="自動起動/ショートカット用ディレクトリ（省略時はデフォルト）")
@@ -22,6 +26,12 @@ def _parse_args(argv=None):
 
 
 def main(argv=None):
+    """
+    アンインストールのエントリポイント。
+    - メタデータがあればそこから install/shortcuts のパスを優先
+    - preview 時は削除しない
+    - 自動起動解除コマンドの一覧も表示する
+    """
     args = _parse_args(argv)
     meta = installer_core.load_install_metadata()
     defaults = installer_core.default_paths()
