@@ -504,6 +504,14 @@ def uninstall_app(install_dir: Path, shortcuts_dir: Optional[Path] = None) -> No
 
 
 def enable_autostart(install_dir: Path, dry_run: bool = False, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> List[List[str]]:
+    """
+    OS ごとに自動起動を登録する。
+    - Windows: タスクスケジューラ /TN "AWS Conn Tray" で ONLOGON 実行
+    - macOS: ~/Library/LaunchAgents に plist を生成し launchctl で load
+    - Linux: ~/.config/systemd/user に service を生成し daemon-reload + enable --now
+    いずれもインストール先の .venv/python と tray_app.py を Exec に埋め込む。
+    dry_run=True ならコマンド配列だけ返す。
+    """
     cmds: List[List[str]] = []
     venv_python = _venv_python_path(install_dir)
     py_exec = str(venv_python)
@@ -580,6 +588,13 @@ def enable_autostart(install_dir: Path, dry_run: bool = False, runner: Callable[
 
 
 def disable_autostart(dry_run: bool = False, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> List[List[str]]:
+    """
+    OS ごとに自動起動登録を解除する。
+    - Windows: schtasks /Delete
+    - macOS: launchctl unload
+    - Linux: systemctl --user disable --now
+    dry_run=True ならコマンド配列だけ返す。
+    """
     cmds: List[List[str]] = []
     if platforms.is_windows():
         cmds.append(["schtasks", "/Delete", "/TN", "AWS Conn Tray", "/F"])
