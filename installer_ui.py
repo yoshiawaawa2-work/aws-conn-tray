@@ -10,6 +10,7 @@ import argparse
 import threading
 import sys
 import os
+import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
