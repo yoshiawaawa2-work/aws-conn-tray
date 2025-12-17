@@ -613,10 +613,16 @@ class InstallerWizard:
         dialog = tk.Toplevel(self.root)
         dialog.title("aws configure sso")
         entries = {}
-        current_profile = self.sso_profile_var.get().strip() or "default"
-        current_cfg = _load_sso_profile_config(current_profile) or {}
+        current_profile = self.sso_profile_var.get().strip()
+        if not current_profile:
+            current_profile = _suggest_new_profile_name(self.sso_profiles)
+            current_cfg = {}
+            mode_text_initial = "新規プロファイルを作成"
+        else:
+            current_cfg = _load_sso_profile_config(current_profile) or {}
+            mode_text_initial = "既存プロファイルを編集" if current_cfg else "新規プロファイルを作成"
 
-        mode_var = tk.StringVar(value="既存プロファイルを編集" if current_cfg else "新規プロファイルを作成")
+        mode_var = tk.StringVar(value=mode_text_initial)
         tk.Label(dialog, textvariable=mode_var, fg="blue").pack(anchor="w", padx=10, pady=4)
 
         def add_field(label, key, default=""):
