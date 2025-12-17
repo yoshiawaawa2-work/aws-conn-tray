@@ -31,7 +31,7 @@ def _which(cmd: str) -> Optional[str]:
 
 def preinstall_check() -> PreinstallResult:
     """
-    Python/awscli/session-manager-plugin/psutil/venv を確認し、足りない場合は推奨インストールコマンドを提示する。
+    Python/awscli/session-manager-plugin/venv を確認し、足りない場合は推奨インストールコマンドを提示する。
     """
     issues: List[str] = []
     suggested: List[List[str]] = []
@@ -43,10 +43,6 @@ def preinstall_check() -> PreinstallResult:
         issues.append("aws CLI v2 が見つかりません。")
     if _which("session-manager-plugin") is None:
         issues.append("session-manager-plugin が見つかりません。")
-    try:
-        import psutil  # noqa: F401
-    except Exception:
-        issues.append("psutil が見つかりません。")
     # venv が利用可能かを確認
     try:
         import venv  # noqa: F401
@@ -59,26 +55,62 @@ def preinstall_check() -> PreinstallResult:
 
 
 def _build_install_suggestions() -> List[List[str]]:
+    py_win = "python"
+    py_unix = "python3"
     if platforms.is_windows():
         return [
             ["winget", "install", "--id", "Amazon.AWSCLI"],
             ["winget", "install", "--id", "Amazon.SessionManagerPlugin"],
-            [sys.executable or "python", "-m", "pip", "install", "psutil"],
-            [sys.executable or "python", "-m", "pip", "install", "virtualenv"],  # venv 代替案
+            [py_win, "-m", "pip", "install", "virtualenv"],  # venv 代替案
         ]
     if platforms.is_macos():
         return [
             ["brew", "install", "awscli"],
             ["brew", "install", "--cask", "session-manager-plugin"],
-            [sys.executable or "python3", "-m", "pip", "install", "psutil"],
-            [sys.executable or "python3", "-m", "pip", "install", "virtualenv"],
+            [py_unix, "-m", "pip", "install", "virtualenv"],
         ]
-    # Linux (例: apt 前提。実際の環境に合わせてユーザーが変更することを想定)
+    mgr = _detect_linux_pkg_mgr()
+    if mgr == "dnf":
+        base = ["dnf", "install", "-y"]
+    elif mgr == "zypper":
+        base = ["zypper", "install", "-y"]
+    else:  # default apt
+        base = ["apt-get", "install", "-y"]
     return [
-        ["sudo", "apt-get", "install", "-y", "awscli", "session-manager-plugin"],
-        [sys.executable or "python3", "-m", "pip", "install", "psutil"],
-        ["sudo", "apt-get", "install", "-y", "python3-venv"],
+        [*base, "awscli", "session-manager-plugin"],
+        [*base, "python3-venv"],
     ]
+
+
+def _detect_linux_pkg_mgr() -> str:
+    """
+    簡易的にディストロを判定し、apt/dnf/zypper のいずれかを返す。
+    AWS_CONN_TRAY_OS_ID 環境変数があればそれを優先（テスト用）。
+    """
+    os_id = os.environ.get("AWS_CONN_TRAY_OS_ID", "").lower()
+    if os_id:
+        return _map_os_id_to_pkg_mgr(os_id)
+    try:
+        data = Path("/etc/os-release").read_text(encoding="utf-8").splitlines()
+        for line in data:
+            if line.startswith("ID="):
+                os_id = line.split("=", 1)[1].strip().strip('"').lower()
+                break
+            if line.startswith("ID_LIKE="):
+                os_id = line.split("=", 1)[1].strip().strip('"').lower()
+    except Exception:
+        os_id = ""
+    return _map_os_id_to_pkg_mgr(os_id)
+
+
+def _map_os_id_to_pkg_mgr(os_id: str) -> str:
+    if any(key in os_id for key in ["ubuntu", "debian"]):
+        return "apt"
+    if any(key in os_id for key in ["fedora", "rhel", "centos", "rocky", "alma"]):
+        return "dnf"
+    if "suse" in os_id:
+        return "zypper"
+    return "apt"
 
 
 def run_commands(commands: List[List[str]], runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> List[Tuple[List[str], int]]:
@@ -472,6 +504,7 @@ class InstallOptions:
     shortcuts_dir: Optional[Path] = None
     auto_install_missing: bool = False
     preview: bool = False
+    simulate_precheck_fail: bool = False
 
 
 @dataclass
@@ -501,6 +534,8 @@ def perform_install(opts: InstallOptions, runner: Callable[..., subprocess.Compl
     issues: List[str] = []
     executed: List[List[str]] = []
     pre = preinstall_check()
+    if opts.simulate_precheck_fail:
+        pre = PreinstallResult(ok=False, issues=["(テスト用) simulate_precheck_fail"], suggested_installs=pre.suggested_installs)
     if not pre.ok:
         if opts.auto_install_missing and pre.suggested_installs:
             run_commands(pre.suggested_installs, runner=runner)
@@ -523,6 +558,12 @@ def perform_install(opts: InstallOptions, runner: Callable[..., subprocess.Compl
     executed.extend(venv_cmds)
     if venv_issues:
         issues.extend(venv_issues)
+        # 依存導入に失敗した場合はクリーンアップして終了
+        try:
+            uninstall_app(opts.install_dir, shortcuts_dir=opts.shortcuts_dir or default_paths().get("autostart_dir"))
+            clear_install_metadata()
+        except Exception:
+            pass
         return InstallResult(ok=False, issues=issues, entries=entries, executed_commands=executed)
     if opts.autostart:
         executed.extend(enable_autostart(opts.install_dir, dry_run=False, runner=runner))
