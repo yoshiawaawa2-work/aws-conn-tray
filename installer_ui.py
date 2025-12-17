@@ -661,6 +661,8 @@ class InstallerWizard:
 
         log = tk.Text(dialog, height=8, width=60, state="disabled")
         log.pack(padx=10, pady=5)
+        error_var = tk.StringVar(value="")
+        tk.Label(dialog, textvariable=error_var, fg="red").pack(anchor="w", padx=10, pady=(0, 4))
 
         def log_line(msg: str):
             log.configure(state="normal")
@@ -690,15 +692,19 @@ class InstallerWizard:
             login_state = "normal" if not missing else "disabled"
             save_btn.config(state=save_state)
             login_btn.config(state=login_state)
+            if missing:
+                error_var.set("必須項目が未入力です: " + ", ".join(missing))
+            else:
+                error_var.set("")
 
         def _write_profile(profile: str):
             if not profile:
-                messagebox.showerror("入力エラー", "プロファイル名を入力してください。")
+                error_var.set("プロファイル名を入力してください。")
                 return False
             # 必須チェック
             missing = _sso_required_missing({k: v.get() for k, v in entries.items()})
             if missing:
-                messagebox.showerror("入力エラー", "必須項目が未入力です: " + ", ".join(missing))
+                error_var.set("必須項目が未入力です: " + ", ".join(missing))
                 return False
             cfg_path = Path.home() / ".aws" / "config"
             cfg_path.parent.mkdir(parents=True, exist_ok=True)
