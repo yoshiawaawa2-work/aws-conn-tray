@@ -851,6 +851,33 @@ class InstallerWizard:
                 _apply_sso_to_ui(self.forward_frames, self.global_vars, profile, entries["sso_region"].get().strip(), entries["sso_start_url"].get().strip())
                 update_buttons()
 
+        login_proc = {"popen": None}
+
+        def set_buttons_during_login(running: bool):
+            """
+            ログイン実行中は保存/新規/ログイン/閉じるを無効化し、キャンセルのみ有効にする。
+            """
+            state = "disabled" if running else "normal"
+            save_btn.configure(state=state)
+            login_btn.configure(state=state)
+            new_btn.configure(state=state)
+            close_btn.configure(state=state)
+            cancel_btn.configure(state="normal" if running else "disabled")
+
+        def on_cancel_login():
+            proc = login_proc.get("popen")
+            if proc and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    time.sleep(0.5)
+                    if proc.poll() is None:
+                        proc.kill()
+                    log_line("SSO ログインをキャンセルしました。")
+                except Exception as e:
+                    log_line(f"キャンセルに失敗しました: {e}")
+            set_buttons_during_login(False)
+            login_proc["popen"] = None
+
         def on_login_and_maybe_save():
             profile = entries["profile"].get().strip()
             dirty = calc_dirty()
@@ -869,33 +896,62 @@ class InstallerWizard:
                 entries["sso_region"].get().strip(),
                 entries["sso_start_url"].get().strip(),
             )
-            # aws sso login を実行（ブラウザはユーザー任せ）
+            # aws sso login を実行（ブラウザはユーザー任せ）。UI をブロックしないようスレッドで実行。
             cmd = ["aws", "sso", "login", "--profile", profile]
-            log_line("aws sso login を実行しています...")
-            try:
-                proc = subprocess.run(cmd, capture_output=True, text=True)
-                if proc.stdout:
-                    log_line(proc.stdout.strip())
-                if proc.stderr:
-                    log_line(proc.stderr.strip())
-                if proc.returncode == 0:
-                    log_line("SSO ログインが完了しました。")
-                    self.state["sso_login_ok"] = True
-                    self._update_sso_status_label()
-                else:
-                    log_line(f"SSO ログインに失敗しました (rc={proc.returncode})")
-            except Exception as e:
-                log_line(f"SSO ログイン実行に失敗しました: {e}")
-            self._run_precheck()
+            log_line("aws sso login を実行しています...（ブラウザを閉じた場合はキャンセルを押してください）")
+            set_buttons_during_login(True)
+
+            def worker():
+                try:
+                    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                    login_proc["popen"] = proc
+                    out, err = proc.communicate()
+                    if out:
+                        log_line(out.strip())
+                    if err:
+                        log_line(err.strip())
+                    if proc.returncode == 0:
+                        log_line("SSO ログインが完了しました。")
+                        self.state["sso_login_ok"] = True
+                        self._update_sso_status_label()
+                    else:
+                        log_line(f"SSO ログインに失敗しました (rc={proc.returncode})")
+                except Exception as e:
+                    log_line(f"SSO ログイン実行に失敗しました: {e}")
+                finally:
+                    login_proc["popen"] = None
+                    set_buttons_during_login(False)
+                    self._run_precheck()
+
+            threading.Thread(target=worker, daemon=True).start()
 
         btn_row = tk.Frame(dialog)
         btn_row.pack(pady=5)
-        tk.Button(btn_row, text="新規作成", command=on_new_profile).pack(side="left", padx=5)
+        new_btn = tk.Button(btn_row, text="新規作成", command=on_new_profile)
+        new_btn.pack(side="left", padx=5)
         save_btn = tk.Button(btn_row, text="保存", command=on_save_only)
         save_btn.pack(side="left", padx=5)
         login_btn = tk.Button(btn_row, text="保存してログイン", command=on_login_and_maybe_save)
         login_btn.pack(side="left", padx=5)
-        tk.Button(btn_row, text="閉じる", command=dialog.destroy).pack(side="left", padx=5)
+        cancel_btn = tk.Button(btn_row, text="キャンセル", state="disabled", command=on_cancel_login)
+        cancel_btn.pack(side="left", padx=5)
+        close_btn = tk.Button(btn_row, text="閉じる", command=lambda: on_close_dialog(force=False))
+        close_btn.pack(side="left", padx=5)
+
+        def on_close_dialog(force: bool):
+            """
+            ログイン中は閉じるをブロックし、キャンセル経由のみ許可。
+            force=True は dialog.destroy を直接呼びたい場合に使用。
+            """
+            if force:
+                dialog.destroy()
+                return
+            if login_proc.get("popen") and login_proc["popen"].poll() is None:
+                messagebox.showinfo("ログイン実行中", "ログインをキャンセルしてから閉じてください。")
+                return
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", on_close_dialog)
 
         # 変更検知でボタン状態更新
         for var in entries.values():
