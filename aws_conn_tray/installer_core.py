@@ -61,31 +61,33 @@ def preinstall_check(sso_profile: Optional[str] = None) -> PreinstallResult:
 
 
 def _build_install_suggestions(sso_profile: Optional[str] = None) -> List[List[str]]:
+    suggestions: List[List[str]] = []
     py_win = "python"
     py_unix = "python3"
     if platforms.is_windows():
-        return [
+        suggestions = [
             ["winget", "install", "--id", "Amazon.AWSCLI"],
             ["winget", "install", "--id", "Amazon.SessionManagerPlugin"],
             [py_win, "-m", "pip", "install", "virtualenv"],  # venv 代替案
         ]
-    if platforms.is_macos():
-        return [
+    elif platforms.is_macos():
+        suggestions = [
             ["brew", "install", "awscli"],
             ["brew", "install", "--cask", "session-manager-plugin"],
             [py_unix, "-m", "pip", "install", "virtualenv"],
         ]
-    mgr = _detect_linux_pkg_mgr()
-    if mgr == "dnf":
-        base = ["dnf", "install", "-y"]
-    elif mgr == "zypper":
-        base = ["zypper", "install", "-y"]
-    else:  # default apt
-        base = ["apt-get", "install", "-y"]
-    return [
-        [*base, "awscli", "session-manager-plugin"],
-        [*base, "python3-venv"],
-    ]
+    else:
+        mgr = _detect_linux_pkg_mgr()
+        if mgr == "dnf":
+            base = ["dnf", "install", "-y"]
+        elif mgr == "zypper":
+            base = ["zypper", "install", "-y"]
+        else:  # default apt
+            base = ["apt-get", "install", "-y"]
+        suggestions = [
+            [*base, "awscli", "session-manager-plugin"],
+            [*base, "python3-venv"],
+        ]
     if sso_profile:
         suggestions.append(["aws", "configure", "sso", "--profile", sso_profile])
     return suggestions
@@ -160,6 +162,10 @@ def _map_os_id_to_pkg_mgr(os_id: str) -> str:
     if "suse" in os_id:
         return "zypper"
     return "apt"
+
+
+def _venv_python_path(install_dir: Path) -> Path:
+    return install_dir / ".venv" / ("Scripts" if platforms.is_windows() else "bin") / ("python.exe" if platforms.is_windows() else "python")
 
 
 def run_commands(commands: List[List[str]], runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> List[Tuple[List[str], int]]:
@@ -494,8 +500,9 @@ def uninstall_app(install_dir: Path, shortcuts_dir: Optional[Path] = None) -> No
 
 def enable_autostart(install_dir: Path, dry_run: bool = False, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> List[List[str]]:
     cmds: List[List[str]] = []
-    venv_python = install_dir / ".venv" / ("Scripts" if platforms.is_windows() else "bin") / ("python.exe" if platforms.is_windows() else "python")
-    py_exec = str(venv_python) if venv_python.exists() else str(Path(sys.executable or "python").resolve())
+    venv_python = _venv_python_path(install_dir)
+    py_exec = str(venv_python)
+    executed: List[List[str]] = []
     if platforms.is_windows():
         task_cmd = [
             "schtasks",
@@ -509,12 +516,53 @@ def enable_autostart(install_dir: Path, dry_run: bool = False, runner: Callable[
         ]
         cmds.append(task_cmd)
     elif platforms.is_macos():
-        plist = Path.home() / "Library" / "LaunchAgents" / "aws.conn.tray.plist"
+        plist_dir = Path.home() / "Library" / "LaunchAgents"
+        plist_dir.mkdir(parents=True, exist_ok=True)
+        plist = plist_dir / "aws.conn.tray.plist"
+        plist.write_text(
+            "\n".join(
+                [
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+                    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">",
+                    "<plist version=\"1.0\">",
+                    "<dict>",
+                    "  <key>Label</key><string>aws.conn.tray</string>",
+                    "  <key>ProgramArguments</key>",
+                    "  <array>",
+                    f"    <string>{py_exec}</string>",
+                    f"    <string>{install_dir / 'tray_app.py'}</string>",
+                    "  </array>",
+                    "  <key>RunAtLoad</key><true/>",
+                    "</dict>",
+                    "</plist>",
+                ]
+            ),
+            encoding="utf-8",
+        )
         cmds.append(["launchctl", "load", str(plist)])
     else:
+        user_systemd = Path.home() / ".config" / "systemd" / "user"
+        user_systemd.mkdir(parents=True, exist_ok=True)
+        service_path = user_systemd / "aws-conn-tray.service"
+        content = "\n".join(
+            [
+                "[Unit]",
+                "Description=AWS Connection Tray Application",
+                "After=network.target",
+                "",
+                "[Service]",
+                f"ExecStart={py_exec} {install_dir / 'tray_app.py'}",
+                "Restart=always",
+                "RestartSec=5",
+                "",
+                "[Install]",
+                "WantedBy=default.target",
+            ]
+        )
+        service_path.write_text(content, encoding="utf-8")
+        cmds.append(["systemctl", "--user", "daemon-reload"])
         cmds.append(["systemctl", "--user", "enable", "--now", "aws-conn-tray.service"])
 
-    executed: List[List[str]] = []
     if dry_run:
         return cmds
     for cmd in cmds:
