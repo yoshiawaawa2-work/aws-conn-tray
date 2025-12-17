@@ -87,7 +87,7 @@ def test_enable_autostart_windows(monkeypatch):
 
 
 def test_perform_install_preview(monkeypatch, tmp_path):
-    monkeypatch.setattr(installer_core, "preinstall_check", lambda: installer_core.PreinstallResult(ok=True, issues=[], suggested_installs=[]))
+    monkeypatch.setattr(installer_core, "preinstall_check", lambda sso_profile=None: installer_core.PreinstallResult(ok=True, issues=[], suggested_installs=[]))
     called = {}
     monkeypatch.setattr(installer_core, "install_app", lambda *a, **k: called.setdefault("install", True))
     monkeypatch.setattr(installer_core, "setup_venv_and_install_deps", lambda *a, **k: (True, [], []))
@@ -135,7 +135,7 @@ def test_install_app_copies_runtime_only(tmp_path, monkeypatch):
 
 
 def test_perform_install_runs_venv(monkeypatch, tmp_path):
-    monkeypatch.setattr(installer_core, "preinstall_check", lambda: installer_core.PreinstallResult(ok=True, issues=[], suggested_installs=[]))
+    monkeypatch.setattr(installer_core, "preinstall_check", lambda sso_profile=None: installer_core.PreinstallResult(ok=True, issues=[], suggested_installs=[]))
     monkeypatch.setattr(installer_core, "install_app", lambda *a, **k: [])
     venv_called = {}
 
@@ -155,7 +155,7 @@ def test_perform_install_runs_venv(monkeypatch, tmp_path):
 
 
 def test_perform_install_fail_venv(monkeypatch, tmp_path):
-    monkeypatch.setattr(installer_core, "preinstall_check", lambda: installer_core.PreinstallResult(ok=True, issues=[], suggested_installs=[]))
+    monkeypatch.setattr(installer_core, "preinstall_check", lambda sso_profile=None: installer_core.PreinstallResult(ok=True, issues=[], suggested_installs=[]))
     install_dir = tmp_path / "app"
     shortcuts_dir = tmp_path / "auto"
 

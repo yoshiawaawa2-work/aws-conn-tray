@@ -29,9 +29,10 @@ def _which(cmd: str) -> Optional[str]:
     return shutil.which(cmd)
 
 
-def preinstall_check() -> PreinstallResult:
+def preinstall_check(sso_profile: Optional[str] = None) -> PreinstallResult:
     """
     Python/awscli/session-manager-plugin/venv を確認し、足りない場合は推奨インストールコマンドを提示する。
+    sso_profile が指定されていれば、AWS config に SSO 設定があるかを確認する。
     """
     issues: List[str] = []
     suggested: List[List[str]] = []
@@ -49,12 +50,17 @@ def preinstall_check() -> PreinstallResult:
     except Exception:
         issues.append("Python venv モジュールが利用できません。")
 
+    if sso_profile:
+        ok_sso, sso_issue = _check_sso_profile(sso_profile)
+        if not ok_sso:
+            issues.append(sso_issue or f"{sso_profile}: SSO 設定が見つかりません。")
+
     if issues:
-        suggested = _build_install_suggestions()
+        suggested = _build_install_suggestions(sso_profile if sso_profile and not ok_sso else None)
     return PreinstallResult(ok=len(issues) == 0, issues=issues, suggested_installs=suggested)
 
 
-def _build_install_suggestions() -> List[List[str]]:
+def _build_install_suggestions(sso_profile: Optional[str] = None) -> List[List[str]]:
     py_win = "python"
     py_unix = "python3"
     if platforms.is_windows():
@@ -80,6 +86,49 @@ def _build_install_suggestions() -> List[List[str]]:
         [*base, "awscli", "session-manager-plugin"],
         [*base, "python3-venv"],
     ]
+    if sso_profile:
+        suggestions.append(["aws", "configure", "sso", "--profile", sso_profile])
+    return suggestions
+
+
+def _check_sso_profile(profile: str) -> Tuple[bool, str]:
+    """
+    ~/.aws/config を確認し、指定プロファイルの SSO 設定があるかをチェックする。
+    """
+    if not profile:
+        return True, ""
+    cfg_path = Path.home() / ".aws" / "config"
+    if not cfg_path.exists():
+        return False, f"{profile}: ~/.aws/config が見つかりません。"
+    try:
+        import configparser
+
+        parser = configparser.RawConfigParser(interpolation=None)
+        parser.read(cfg_path, encoding="utf-8")
+        sessions: Dict[str, Dict[str, str]] = {}
+        for section in parser.sections():
+            if section.startswith("sso-session"):
+                name = section.replace("sso-session ", "").strip()
+                sessions[name] = {
+                    "sso_start_url": parser.get(section, "sso_start_url", fallback=""),
+                    "sso_region": parser.get(section, "sso_region", fallback=""),
+                }
+        section = "default" if profile == "default" else f"profile {profile}"
+        if section not in parser:
+            return False, f"{profile}: SSO 設定がありません。aws configure sso を実行してください。"
+        start_url = parser.get(section, "sso_start_url", fallback="")
+        sso_region = parser.get(section, "sso_region", fallback="")
+        sso_session = parser.get(section, "sso_session", fallback="")
+        if not start_url and sso_session:
+            sess = sessions.get(sso_session)
+            if sess:
+                start_url = sess.get("sso_start_url", "")
+                sso_region = sso_region or sess.get("sso_region", "")
+        if not start_url or not sso_region:
+            return False, f"{profile}: sso_start_url または sso_region が未設定です。aws configure sso を実行してください。"
+        return True, ""
+    except Exception as e:
+        return False, f"{profile}: SSO 設定の確認に失敗しました: {e}"
 
 
 def _detect_linux_pkg_mgr() -> str:
@@ -504,6 +553,7 @@ class InstallOptions:
     shortcuts_dir: Optional[Path] = None
     auto_install_missing: bool = False
     preview: bool = False
+    sso_profile: Optional[str] = None
     simulate_precheck_fail: bool = False
 
 
@@ -533,7 +583,7 @@ class UninstallResult:
 def perform_install(opts: InstallOptions, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> InstallResult:
     issues: List[str] = []
     executed: List[List[str]] = []
-    pre = preinstall_check()
+    pre = preinstall_check(sso_profile=opts.sso_profile)
     if opts.simulate_precheck_fail:
         pre = PreinstallResult(ok=False, issues=["(テスト用) simulate_precheck_fail"], suggested_installs=pre.suggested_installs)
     if not pre.ok:
