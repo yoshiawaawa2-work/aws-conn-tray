@@ -27,9 +27,9 @@ from aws_conn_tray import installer_core
 def build_config_data(forwards: List[Dict[str, str]], globals_raw: Dict[str, str]) -> Dict[str, Any]:
     """
     Tk の入力値から config.json 相当の dict を生成する。
-    wx_tray.validate_settings_input を利用してバリデーションする（wx 依存なし）。
+    wx 非依存の settings_validator を利用してバリデーションする。
     """
-    from aws_conn_tray import wx_tray  # 遅延インポートで wx の有無に影響されないようにする
+    from aws_conn_tray import settings_validator
 
     data = {
         "forwards": forwards,
@@ -45,7 +45,7 @@ def build_config_data(forwards: List[Dict[str, str]], globals_raw: Dict[str, str
         "sso_auto_refresh_margin_seconds": 300,
         "tunnel_check_interval_seconds": 10,
     }
-    ok, errors, parsed = wx_tray.validate_settings_input(data, defaults)
+    ok, errors, parsed = settings_validator.validate_settings_input(data, defaults)
     if not ok:
         raise ValueError("\n".join(errors))
     return parsed
