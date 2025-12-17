@@ -164,6 +164,21 @@ def _suggest_new_profile_name(existing: List[str]) -> str:
             return cand
         i += 1
 
+
+def _sso_required_missing(values: Dict[str, str]) -> List[str]:
+    required = {
+        "profile": "プロファイル名",
+        "sso_start_url": "SSO Start URL",
+        "sso_region": "SSO リージョン",
+        "sso_account_id": "SSO アカウントID",
+        "sso_role_name": "SSO ロール名",
+    }
+    missing = []
+    for key, label in required.items():
+        if not values.get(key, "").strip():
+            missing.append(label)
+    return missing
+
 def _ensure_supported_os(args) -> bool:
     if getattr(args, "simulate_unsupported_os", False):
         pass_supported = False
@@ -281,6 +296,8 @@ class InstallerWizard:
         tk.Label(frame, text="ようこそ", font=("Arial", 14, "bold")).pack(anchor="w", padx=10, pady=5)
         self.precheck_text = tk.Text(frame, height=8, width=70, state="disabled")
         self.precheck_text.pack(padx=10, pady=5)
+        tk.Label(frame, text="SSO ログインが完了していない場合、次へ進めません。", fg="red").pack(anchor="w", padx=10, pady=(0, 4))
+        tk.Label(frame, text="※ SSO設定画面で「ログイン」に成功してから続行してください。", fg="red").pack(anchor="w", padx=10, pady=(0, 6))
         tk.Button(
             frame,
             text="前提不足時に推奨コマンドを自動実行",
@@ -650,19 +667,36 @@ class InstallerWizard:
             log.insert("end", msg + "\n")
             log.see("end")
             log.configure(state="disabled")
+            log.update_idletasks()
+
+        initial_values = {
+            "profile": entries["profile"].get(),
+            "sso_start_url": entries["sso_start_url"].get(),
+            "sso_region": entries["sso_region"].get(),
+            "sso_account_id": entries["sso_account_id"].get(),
+            "sso_role_name": entries["sso_role_name"].get(),
+        }
+
+        def calc_dirty() -> bool:
+            current = {k: v.get() for k, v in entries.items() if k in initial_values}
+            return any(current[k] != initial_values[k] for k in initial_values)
+
+        def update_buttons():
+            missing = _sso_required_missing({k: v.get() for k, v in entries.items()})
+            dirty = calc_dirty()
+            if dirty:
+                self.state["sso_login_ok"] = False
+            save_state = "normal" if dirty else "disabled"
+            login_state = "normal" if not missing else "disabled"
+            save_btn.config(state=save_state)
+            login_btn.config(state=login_state)
 
         def _write_profile(profile: str):
             if not profile:
                 messagebox.showerror("入力エラー", "プロファイル名を入力してください。")
                 return False
             # 必須チェック
-            required_fields = {
-                "SSO Start URL": entries["sso_start_url"].get().strip(),
-                "SSO リージョン": entries["sso_region"].get().strip(),
-                "SSO アカウントID": entries["sso_account_id"].get().strip(),
-                "SSO ロール名": entries["sso_role_name"].get().strip(),
-            }
-            missing = [k for k, v in required_fields.items() if not v]
+            missing = _sso_required_missing({k: v.get() for k, v in entries.items()})
             if missing:
                 messagebox.showerror("入力エラー", "必須項目が未入力です: " + ", ".join(missing))
                 return False
@@ -714,12 +748,17 @@ class InstallerWizard:
                     entries[key].set("")
             mode_var.set("新規プロファイルを作成")
             log_line("新規プロファイル作成モードです。")
+            update_buttons()
 
         def on_save_only():
             profile = entries["profile"].get().strip()
             if _write_profile(profile):
                 log_line("保存しました（ログインは未実施）。")
                 self._run_precheck()
+                # 保存後の値を初期値として再設定
+                for k in initial_values:
+                    initial_values[k] = entries[k].get()
+                update_buttons()
 
         def on_save_and_login():
             profile = entries["profile"].get().strip()
@@ -746,9 +785,16 @@ class InstallerWizard:
         btn_row = tk.Frame(dialog)
         btn_row.pack(pady=5)
         tk.Button(btn_row, text="新規作成", command=on_new_profile).pack(side="left", padx=5)
-        tk.Button(btn_row, text="保存", command=on_save_only).pack(side="left", padx=5)
-        tk.Button(btn_row, text="設定してログイン", command=on_save_and_login).pack(side="left", padx=5)
+        save_btn = tk.Button(btn_row, text="保存", command=on_save_only)
+        save_btn.pack(side="left", padx=5)
+        login_btn = tk.Button(btn_row, text="ログイン", command=on_save_and_login)
+        login_btn.pack(side="left", padx=5)
         tk.Button(btn_row, text="閉じる", command=dialog.destroy).pack(side="left", padx=5)
+
+        # 変更検知でボタン状態更新
+        for var in entries.values():
+            var.trace_add("write", lambda *_: update_buttons())
+        update_buttons()
 
     def _auto_install_suggestions(self):
         suggested = self.state.get("precheck_suggested") or []
