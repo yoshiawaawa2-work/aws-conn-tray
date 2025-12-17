@@ -176,6 +176,7 @@ def test_simulate_precheck_fail_flag(monkeypatch):
     wiz = installer_ui.InstallerWizard.__new__(installer_ui.InstallerWizard)
     wiz.simulate_precheck_fail = True
     wiz.state = {"precheck_ok": True, "precheck_issues": [], "precheck_suggested": []}
+    wiz.sso_profile_var = type("Var", (), {"get": lambda self=None: ""})()
     wiz.precheck_text = type("Dummy", (), {})()
     wiz.precheck_text.configure = lambda **kwargs: None
     wiz.precheck_text.delete = lambda *a, **k: None
@@ -200,3 +201,100 @@ def test_simulate_unsupported_os(monkeypatch):
     monkeypatch.setattr(installer_ui.installer_core.platforms, "is_windows", lambda: True)
     # simulate flag should still force unsupported
     assert installer_ui._ensure_supported_os(args) is False
+
+
+def test_next_step_blocks_sso_not_logged_in(monkeypatch):
+    calls = {}
+
+    class DummyBtn:
+        def __init__(self):
+            self.kwargs = {}
+
+        def config(self, **kwargs):
+            self.kwargs.update(kwargs)
+
+    wiz = installer_ui.InstallerWizard.__new__(installer_ui.InstallerWizard)
+    wiz.current_step = 0
+    wiz.state = {"precheck_ok": True, "precheck_issues": [], "precheck_suggested": [], "sso_profile": "p", "sso_login_ok": False}
+    wiz.sso_profile_var = type("Var", (), {"get": lambda self=None: "p"})()
+    wiz.precheck_text = type("Dummy", (), {})()
+    wiz.precheck_text.configure = lambda **kwargs: None
+    wiz.precheck_text.delete = lambda *a, **k: None
+    wiz.precheck_text.insert = lambda *a, **k: None
+    wiz._update_nav_labels = lambda: None
+    wiz._show_step = lambda idx: calls.setdefault("show", idx)
+    wiz.back_button = DummyBtn()
+    wiz.next_button = DummyBtn()
+    monkeypatch.setattr(installer_ui, "messagebox", type("MB", (), {"showerror": lambda *a, **k: calls.setdefault("error", True)}))
+
+    installer_ui.InstallerWizard.next_step(wiz)
+    assert calls.get("error") is True
+    assert "show" not in calls
+
+
+def test_get_sso_profiles_handles_percent(tmp_path, monkeypatch):
+    cfg = tmp_path / "config"
+    cfg.write_text(
+        "\n".join(
+            [
+                "[profile test]",
+                "sso_start_url=https://example/",
+                "sso_region=us-east-1",
+                "credential_process=/bin/echo %s",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    profs = installer_ui._get_sso_profiles(cfg)
+    assert "test" in profs
+
+
+def test_get_sso_profiles_with_session_reference(tmp_path):
+    cfg = tmp_path / "config"
+    cfg.write_text(
+        "\n".join(
+            [
+                "[profile p1]",
+                "sso_session = default",
+                "region = ap-northeast-1",
+                "",
+                "[sso-session default]",
+                "sso_start_url = https://start",
+                "sso_region = ap-northeast-1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    profs = installer_ui._get_sso_profiles(cfg)
+    assert "p1" in profs
+
+
+def test_load_sso_profile_config_with_session(tmp_path):
+    cfg = tmp_path / "config"
+    cfg.write_text(
+        "\n".join(
+            [
+                "[profile PS-Admin-snapvalue-jp]",
+                "sso_session = default",
+                "sso_account_id = 061051222627",
+                "sso_role_name = PS-Admin",
+                "region = ap-northeast-1",
+                "",
+                "[default]",
+                "sso_session = default",
+                "sso_account_id = 061051222627",
+                "sso_role_name = PS-Admin",
+                "region = ap-northeast-1",
+                "",
+                "[sso-session default]",
+                "sso_start_url = https://example",
+                "sso_region = ap-northeast-1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg_data = installer_ui._load_sso_profile_config("PS-Admin-snapvalue-jp", cfg)
+    assert cfg_data["sso_start_url"] == "https://example"
+    assert cfg_data["sso_region"] == "ap-northeast-1"
+    assert cfg_data["sso_account_id"] == "061051222627"
+    assert cfg_data["sso_role_name"] == "PS-Admin"

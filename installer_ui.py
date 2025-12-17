@@ -115,21 +115,6 @@ def _load_sso_profile_config(profile: str, config_path: Optional[Path] = None) -
     cfg_path = Path(config_path) if config_path else Path(os.environ.get("AWS_CONFIG_FILE", Path.home() / ".aws" / "config"))
     if not cfg_path.exists() or not profile:
         return {}
-
-
-def _suggest_new_profile_name(existing: List[str]) -> str:
-    """
-    既存プロファイル一覧を元に、新規作成時のデフォルト名を返す。
-    default が空いていれば default、それ以外は profile-1,2,... を採番。
-    """
-    if "default" not in existing:
-        return "default"
-    i = 1
-    while True:
-        cand = f"profile-{i}"
-        if cand not in existing:
-            return cand
-        i += 1
     try:
         import configparser
 
@@ -164,6 +149,20 @@ def _suggest_new_profile_name(existing: List[str]) -> str:
     except Exception:
         return {}
 
+
+def _suggest_new_profile_name(existing: List[str]) -> str:
+    """
+    既存プロファイル一覧を元に、新規作成時のデフォルト名を返す。
+    default が空いていれば default、それ以外は profile-1,2,... を採番。
+    """
+    if "default" not in existing:
+        return "default"
+    i = 1
+    while True:
+        cand = f"profile-{i}"
+        if cand not in existing:
+            return cand
+        i += 1
 
 def _ensure_supported_os(args) -> bool:
     if getattr(args, "simulate_unsupported_os", False):
