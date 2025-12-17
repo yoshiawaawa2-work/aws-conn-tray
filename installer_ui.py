@@ -680,6 +680,10 @@ class InstallerWizard:
             "sso_role_name": entries["sso_role_name"].get(),
         }
 
+        def set_initial_from_entries():
+            for k in initial_values:
+                initial_values[k] = entries[k].get()
+
         def calc_dirty() -> bool:
             current = {k: v.get() for k, v in entries.items() if k in initial_values}
             return any(current[k] != initial_values[k] for k in initial_values)
@@ -755,6 +759,7 @@ class InstallerWizard:
                     entries[key].set("")
             mode_var.set("新規プロファイルを作成")
             log_line("新規プロファイル作成モードです。")
+            set_initial_from_entries()
             update_buttons()
 
         def on_save_only():
@@ -763,8 +768,7 @@ class InstallerWizard:
                 log_line("保存しました（ログインは未実施）。")
                 self._run_precheck()
                 # 保存後の値を初期値として再設定
-                for k in initial_values:
-                    initial_values[k] = entries[k].get()
+                set_initial_from_entries()
                 update_buttons()
 
         def on_login_and_maybe_save():
