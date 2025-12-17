@@ -86,6 +86,40 @@ def test_enable_autostart_windows(monkeypatch):
     assert any("schtasks" in c for c in seen[0])
 
 
+def test_enable_autostart_linux_uses_venv(monkeypatch, tmp_path):
+    monkeypatch.setattr(installer_core.platforms, "is_windows", lambda: False)
+    monkeypatch.setattr(installer_core.platforms, "is_macos", lambda: False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    install_dir = tmp_path / "app"
+    install_dir.mkdir()
+    (install_dir / "tray_app.py").write_text("print('x')", encoding="utf-8")
+
+    cmds = installer_core.enable_autostart(install_dir, dry_run=True)
+
+    service_path = tmp_path / ".config" / "systemd" / "user" / "aws-conn-tray.service"
+    assert service_path.exists()
+    content = service_path.read_text(encoding="utf-8")
+    assert str(installer_core._venv_python_path(install_dir)) in content
+    assert any(cmd[:3] == ["systemctl", "--user", "daemon-reload"] for cmd in cmds)
+
+
+def test_enable_autostart_macos_uses_venv(monkeypatch, tmp_path):
+    monkeypatch.setattr(installer_core.platforms, "is_windows", lambda: False)
+    monkeypatch.setattr(installer_core.platforms, "is_macos", lambda: True)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    install_dir = tmp_path / "app"
+    install_dir.mkdir()
+    (install_dir / "tray_app.py").write_text("print('x')", encoding="utf-8")
+
+    cmds = installer_core.enable_autostart(install_dir, dry_run=True)
+
+    plist_path = tmp_path / "Library" / "LaunchAgents" / "aws.conn.tray.plist"
+    assert plist_path.exists()
+    content = plist_path.read_text(encoding="utf-8")
+    assert str(installer_core._venv_python_path(install_dir)) in content
+    assert any("launchctl" in cmd[0] for cmd in cmds)
+
+
 def test_perform_install_preview(monkeypatch, tmp_path):
     monkeypatch.setattr(installer_core, "preinstall_check", lambda sso_profile=None: installer_core.PreinstallResult(ok=True, issues=[], suggested_installs=[]))
     called = {}
@@ -208,3 +242,11 @@ def test_build_install_suggestions_python_cmd(monkeypatch):
     monkeypatch.setattr(installer_core.platforms, "is_linux", lambda: False)
     suggestions = installer_core._build_install_suggestions()
     assert any(cmd[:3] == ["python", "-m", "pip"] for cmd in suggestions)
+
+
+def test_build_install_suggestions_adds_sso(monkeypatch):
+    monkeypatch.setattr(installer_core.platforms, "is_windows", lambda: False)
+    monkeypatch.setattr(installer_core.platforms, "is_macos", lambda: False)
+    monkeypatch.setattr(installer_core.platforms, "is_linux", lambda: True)
+    suggestions = installer_core._build_install_suggestions("my-profile")
+    assert any(cmd[:3] == ["aws", "configure", "sso"] for cmd in suggestions)
