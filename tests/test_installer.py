@@ -298,3 +298,18 @@ def test_load_sso_profile_config_with_session(tmp_path):
     assert cfg_data["sso_region"] == "ap-northeast-1"
     assert cfg_data["sso_account_id"] == "061051222627"
     assert cfg_data["sso_role_name"] == "PS-Admin"
+
+
+def test_sso_required_missing():
+    vals_ok = {
+        "profile": "p",
+        "sso_start_url": "u",
+        "sso_region": "r",
+        "sso_account_id": "a",
+        "sso_role_name": "role",
+    }
+    assert installer_ui._sso_required_missing(vals_ok) == []
+    vals_ng = vals_ok.copy()
+    vals_ng["sso_region"] = ""
+    missing = installer_ui._sso_required_missing(vals_ng)
+    assert "SSO リージョン" in missing
