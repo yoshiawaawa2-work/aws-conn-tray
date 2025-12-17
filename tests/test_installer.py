@@ -350,3 +350,25 @@ def test_apply_sso_to_ui_updates_fields():
     assert ff["vars"]["profile"].get() == "newprof"
     assert ff["vars"]["region"].get() == "ap-northeast-1"
     assert globals_vars["sso_start_url"].get() == "https://start"
+
+
+def test_on_profile_change_resets_login(monkeypatch):
+    class DummyBtn:
+        def __init__(self):
+            self.kwargs = {}
+
+        def config(self, **kwargs):
+            self.kwargs.update(kwargs)
+
+    wiz = installer_ui.InstallerWizard.__new__(installer_ui.InstallerWizard)
+    wiz.frames = [None, None]
+    wiz.current_step = 0
+    wiz.state = {"precheck_ok": True, "sso_login_ok": True}
+    wiz.forward_frames = [{"profile": None, "region": None}]
+    wiz.global_vars = {"sso_start_url": None}
+    wiz.back_button = DummyBtn()
+    wiz.next_button = DummyBtn()
+    wiz.sso_status_var = None
+    wiz.sso_profile_var = type("Var", (), {"get": lambda self=None: "p"})()
+    installer_ui.InstallerWizard._on_profile_change(wiz)
+    assert wiz.state["sso_login_ok"] is False
