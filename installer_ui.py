@@ -180,6 +180,31 @@ def _sso_required_missing(values: Dict[str, str]) -> List[str]:
             missing.append(label)
     return missing
 
+
+def _apply_sso_to_ui(forward_frames: List[Any], global_vars: Dict[str, Any], profile: str, sso_region: str, start_url: str):
+    """
+    forward_frames/global_vars を直接更新するユーティリティ（テスト容易性のため切り出し）。
+    profile/region/start_url を UI バインド変数に反映する。
+    """
+    if global_vars and "sso_start_url" in global_vars and start_url:
+        try:
+            global_vars["sso_start_url"].set(start_url)
+        except Exception:
+            pass
+    for ff in forward_frames or []:
+        vars_map = ff
+        if isinstance(ff, dict) and "vars" in ff:
+            vars_map = ff["vars"]
+        if not isinstance(vars_map, dict):
+            continue
+        try:
+            if "profile" in vars_map:
+                vars_map["profile"].set(profile)
+            if sso_region and "region" in vars_map:
+                vars_map["region"].set(sso_region)
+        except Exception:
+            continue
+
 def _ensure_supported_os(args) -> bool:
     if getattr(args, "simulate_unsupported_os", False):
         pass_supported = False
@@ -799,6 +824,7 @@ class InstallerWizard:
                 self._run_precheck()
                 # 保存後の値を初期値として再設定
                 set_initial_from_entries()
+                _apply_sso_to_ui(self.forward_frames, self.global_vars, profile, entries["sso_region"].get().strip(), entries["sso_start_url"].get().strip())
                 update_buttons()
 
         def on_login_and_maybe_save():
@@ -809,6 +835,7 @@ class InstallerWizard:
                     return
                 for k in initial_values:
                     initial_values[k] = entries[k].get()
+                _apply_sso_to_ui(self.forward_frames, self.global_vars, profile, entries["sso_region"].get().strip(), entries["sso_start_url"].get().strip())
             else:
                 log_line("変更がないため保存はスキップします。")
             # aws sso login を実行（ブラウザはユーザー任せ）
