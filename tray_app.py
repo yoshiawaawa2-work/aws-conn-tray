@@ -4,12 +4,17 @@ import sys
 from aws_conn_tray.config_loader import load_config
 from aws_conn_tray.logger import notify
 from aws_conn_tray.prerequisites import ensure_supported_os, check_prerequisites
+from aws_conn_tray.single_instance import SingleInstanceLock
 
 
 def main():
     """
     wxPython 版のみを起動するエントリポイント。
     """
+    lock = SingleInstanceLock()
+    if not lock.acquire():
+        notify("AWS Conn Tray", "既に AWS Conn Tray が起動しています。")
+        return
     ensure_supported_os()
     config = load_config()
 
@@ -30,7 +35,10 @@ def main():
         sys.exit(1)
 
     # config は事前チェック済みのものを渡して起動
-    run_wx_app(config)
+    try:
+        run_wx_app(config)
+    finally:
+        lock.release()
 
 
 if __name__ == "__main__":
