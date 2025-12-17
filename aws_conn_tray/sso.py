@@ -1,3 +1,10 @@
+"""
+SSO ログインとトークン監視まわりのユーティリティ。
+- ~/.aws/sso/cache から accessToken の有効性を確認
+- aws sso login --no-browser を実行してデバイスフローの URL/コードを抽出
+- Qt WebView/Browsers から再ログインを促す呼び出し元（wx_tray）に結果を返す
+"""
+
 import glob
 import os
 import re
@@ -95,6 +102,11 @@ def is_sso_session_valid(profile: str, region: str) -> bool:
 
 
 def _parse_device_flow(text: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    aws sso login --no-browser の出力から認可URLとデバイスコードらしきものを拾う。
+    - authorize を含む URL を優先し、見つからなければ最初の URL を採用
+    - 例: XXXX-XXXX 形式のコードを抽出
+    """
     url = None
     code = None
     urls = [m.strip().rstrip(".") for m in re.findall(r"https?://\S+", text)]
@@ -113,6 +125,9 @@ def _parse_device_flow(text: str) -> Tuple[Optional[str], Optional[str]]:
 def run_sso_login(profile: str, region: str, sso_start_url: str, timeout: int) -> bool:
     """
     aws sso login --no-browser を実行し、認可URLを取得して開く。
+    - pty があれば対話出力を拾いやすいよう pty で接続
+    - authorize URL を検出したらデフォルトブラウザで開く（WebView 側は別経路）
+    - 最後にトークン取得完了を待ち、成功/失敗を bool で返す
     """
     global LAST_DEVICE_URL, LAST_DEVICE_CODE
     cmd = ["aws", "sso", "login", "--no-browser", "--profile", profile]
