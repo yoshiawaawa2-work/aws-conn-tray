@@ -298,12 +298,6 @@ class InstallerWizard:
         tk.Label(frame, text="ようこそ", font=("Arial", 14, "bold")).pack(anchor="w", padx=10, pady=5)
         self.precheck_text = tk.Text(frame, height=8, width=70, state="disabled")
         self.precheck_text.pack(padx=10, pady=5)
-        self.sso_status_var = tk.StringVar(value="SSO ログインが完了していない場合、次へ進めません。")
-        self.sso_status_label = tk.Label(frame, textvariable=self.sso_status_var, fg="red")
-        self.sso_status_label.pack(anchor="w", padx=10, pady=(0, 4))
-        self.sso_hint_var = tk.StringVar(value="※ SSO設定画面で「ログイン」に成功してから続行してください。")
-        self.sso_hint_label = tk.Label(frame, textvariable=self.sso_hint_var, fg="red")
-        self.sso_hint_label.pack(anchor="w", padx=10, pady=(0, 6))
         tk.Button(
             frame,
             text="前提不足時に推奨コマンドを自動実行",
@@ -312,12 +306,18 @@ class InstallerWizard:
         tk.Button(frame, text="再チェック", command=self._run_precheck).pack(anchor="e", padx=10, pady=5)
         sso_row = tk.Frame(frame)
         sso_row.pack(fill="x", padx=10, pady=2)
+        self.sso_status_var = tk.StringVar(value="SSO ログインが完了していない場合、次へ進めません。")
+        self.sso_status_label = tk.Label(sso_row, textvariable=self.sso_status_var, fg="red")
+        self.sso_status_label.pack(side="right", padx=5)
         tk.Label(sso_row, text="SSOプロファイル").pack(side="left")
         self.sso_profile_var = tk.StringVar(value=self.state.get("sso_profile", ""))
         self.sso_profile_cb = ttk.Combobox(sso_row, textvariable=self.sso_profile_var, values=self.sso_profiles, width=18)
         self.sso_profile_cb.pack(side="left", padx=5)
         self.sso_button = tk.Button(sso_row, text="SSO設定", command=self._open_sso_config_dialog)
         self.sso_button.pack(side="left")
+        self.sso_hint_var = tk.StringVar(value="※ SSO設定画面で「ログイン」に成功してから続行してください。")
+        self.sso_hint_label = tk.Label(frame, textvariable=self.sso_hint_var, fg="red")
+        self.sso_hint_label.pack(anchor="w", padx=10, pady=(0, 6))
         self._run_precheck()
         return frame
 
