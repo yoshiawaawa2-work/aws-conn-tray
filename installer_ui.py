@@ -601,7 +601,8 @@ class InstallerWizard:
                 state = "normal"
                 if self.current_step == 0 and not self.state.get("precheck_ok", False):
                     state = "disabled"
-                if self.current_step == 0 and self.state.get("sso_profile") and not self.state.get("sso_login_ok"):
+                # SSO ログイン未完了なら次へ進めない
+                if self.current_step == 0 and not self.state.get("sso_login_ok", False):
                     state = "disabled"
                 self.next_button.config(text="次へ", state=state)
 

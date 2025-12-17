@@ -232,6 +232,24 @@ def test_next_step_blocks_sso_not_logged_in(monkeypatch):
     assert "show" not in calls
 
 
+def test_nav_disabled_when_sso_not_logged_in(monkeypatch):
+    class DummyBtn:
+        def __init__(self):
+            self.kwargs = {}
+
+        def config(self, **kwargs):
+            self.kwargs.update(kwargs)
+
+    wiz = installer_ui.InstallerWizard.__new__(installer_ui.InstallerWizard)
+    wiz.frames = [None, None]
+    wiz.current_step = 0
+    wiz.state = {"precheck_ok": True, "sso_login_ok": False}
+    wiz.back_button = DummyBtn()
+    wiz.next_button = DummyBtn()
+    installer_ui.InstallerWizard._update_nav_labels(wiz)
+    assert wiz.next_button.kwargs.get("state") == "disabled"
+
+
 def test_get_sso_profiles_handles_percent(tmp_path, monkeypatch):
     cfg = tmp_path / "config"
     cfg.write_text(
