@@ -2,6 +2,7 @@
 自動起動の有効/無効をGUIまたはCLIで切り替える簡易ツール。
 - 引数なし: Tkinter GUI を表示
 - --enable / --disable: CLI で実行
+起動先の Python はインストール先の .venv を優先する（installer_core.enable_autostart に委譲）。
 """
 
 from __future__ import annotations
@@ -26,12 +27,20 @@ def _parse_args(argv=None):
 
 
 def _get_install_dir(install_dir: str | Path | None = None) -> Path:
+    """
+    インストール先ルートを決定する。
+    引数が無ければこのスクリプトの親ディレクトリ（配布物内に置く想定）。
+    """
     if install_dir:
         return Path(install_dir).expanduser()
     return Path(__file__).resolve().parent
 
 
 def toggle_autostart(enable: bool, install_dir: str | Path | None = None):
+    """
+    enable=True なら自動起動登録、False なら解除。
+    インストール先から .venv/python を探し、OS ごとの登録コマンドを実行する。
+    """
     install_dir = _get_install_dir(install_dir)
     if enable:
         return installer_core.enable_autostart(install_dir, dry_run=False)
@@ -80,6 +89,11 @@ def is_autostart_enabled(install_dir: str | Path | None = None, runner=subproces
 
 
 def run_gui():
+    """
+    Tk GUI を表示して現在の登録状態を確認し、ボタン1つで登録/解除をトグルする。
+    - is_autostart_enabled で状態表示
+    - トグル後に即座に表示を更新
+    """
     root = tk.Tk()
     root.title("自動起動設定")
     tk.Label(root, text="aws-conn-tray の自動起動を切り替えます。").pack(padx=10, pady=6)
