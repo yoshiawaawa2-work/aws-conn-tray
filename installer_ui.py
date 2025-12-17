@@ -835,9 +835,16 @@ class InstallerWizard:
                     return
                 for k in initial_values:
                     initial_values[k] = entries[k].get()
-                _apply_sso_to_ui(self.forward_frames, self.global_vars, profile, entries["sso_region"].get().strip(), entries["sso_start_url"].get().strip())
             else:
                 log_line("変更がないため保存はスキップします。")
+            # 保存の有無に関わらず UI へ反映
+            _apply_sso_to_ui(
+                self.forward_frames,
+                self.global_vars,
+                profile,
+                entries["sso_region"].get().strip(),
+                entries["sso_start_url"].get().strip(),
+            )
             # aws sso login を実行（ブラウザはユーザー任せ）
             cmd = ["aws", "sso", "login", "--profile", profile]
             log_line("aws sso login を実行しています...")
