@@ -340,6 +340,8 @@ class InstallerWizard:
         self.sso_profile_cb.pack(side="left", padx=5)
         self.sso_button = tk.Button(sso_row, text="SSO設定", command=self._open_sso_config_dialog)
         self.sso_button.pack(side="left")
+        # プロファイル変更時に状態とUIを更新
+        self.sso_profile_var.trace_add("write", lambda *_: self._on_profile_change())
         self.sso_hint_var = tk.StringVar(value="※ SSO設定画面で「ログイン」に成功してから続行してください。")
         self.sso_hint_label = tk.Label(frame, textvariable=self.sso_hint_var, fg="red")
         self.sso_hint_label.pack(anchor="w", padx=10, pady=(0, 6))
@@ -650,6 +652,18 @@ class InstallerWizard:
                 self.sso_hint_var.set("※ SSO設定画面で「ログイン」に成功してから続行してください。")
                 if hasattr(self, "sso_hint_label"):
                     self.sso_hint_label.config(fg="red")
+
+    def _on_profile_change(self):
+        # プロファイル変更時は未ログイン状態に戻し、必要なら設定をUIに反映
+        prof = self.sso_profile_var.get().strip()
+        self.state["sso_profile"] = prof
+        self.state["sso_login_ok"] = False
+        if prof:
+            cfg = _load_sso_profile_config(prof)
+            if cfg:
+                _apply_sso_to_ui(self.forward_frames, self.global_vars, prof, cfg.get("sso_region", ""), cfg.get("sso_start_url", ""))
+        self._update_nav_labels()
+        self._update_sso_status_label()
 
     # --- インストール処理 ---
     def _start_install(self):
