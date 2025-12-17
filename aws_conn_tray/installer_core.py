@@ -285,8 +285,8 @@ def generate_linux_autostart(install_dir: Path, shortcuts_dir: Path, python_exec
         },
         "aws-conn-tray-disable-autostart.desktop": {
             "Name": "AWS Conn Tray - 自動起動解除",
-            "Exec": "systemctl --user disable --now aws-conn-tray.service",
-            "Comment": "自動起動を無効化します",
+            "Exec": f"{py} {install_dir / 'autostart_gui.py'}",
+            "Comment": "自動起動を設定/解除します",
         },
     }
     for name, data in desktop_templates.items():
@@ -315,7 +315,7 @@ def generate_windows_shortcuts(install_dir: Path, shortcuts_dir: Path, python_ex
     scripts = {
         "AWS Conn Tray (起動).cmd": f'@echo off\n"{py}" "{install_dir / "tray_app.py"}"\n',
         "AWS Conn Tray (設定).cmd": f'@echo off\n"{py}" "{install_dir / "tray_app.py"}" --settings\n',
-        "AWS Conn Tray (自動起動解除).cmd": '@echo off\nschtasks /Delete /TN "AWS Conn Tray" /F\n',
+        "AWS Conn Tray (自動起動解除).cmd": f'@echo off\n"{py}" "{install_dir / "autostart_gui.py"}"\n',
     }
     paths: List[Path] = []
     for name, content in scripts.items():
@@ -331,7 +331,7 @@ def generate_macos_shortcuts(install_dir: Path, shortcuts_dir: Path, python_exec
     scripts = {
         "AWS Conn Tray 起動.command": f'#!/bin/bash\n"{py}" "{install_dir / "tray_app.py"}"\n',
         "AWS Conn Tray 設定.command": f'#!/bin/bash\n"{py}" "{install_dir / "tray_app.py"}" --settings\n',
-        "AWS Conn Tray 自動起動解除.command": '#!/bin/bash\nlaunchctl unload ~/Library/LaunchAgents/aws.conn.tray.plist\n',
+        "AWS Conn Tray 自動起動解除.command": f'#!/bin/bash\n"{py}" "{install_dir / "autostart_gui.py"}"\n',
     }
     paths: List[Path] = []
     for name, content in scripts.items():
@@ -407,7 +407,15 @@ def install_app(
     install_dir = install_dir.expanduser()
     install_dir.mkdir(parents=True, exist_ok=True)
     runtime_dirs = {"aws_conn_tray", "config", "icons", "systemd"}
-    runtime_files = {"tray_app.py", "app_utils.py", "uninstaller.py", "uninstaller_ui.py", "requirements.txt", "README.md"}
+    runtime_files = {
+        "tray_app.py",
+        "app_utils.py",
+        "uninstaller.py",
+        "uninstaller_ui.py",
+        "autostart_gui.py",
+        "requirements.txt",
+        "README.md",
+    }
 
     for item in os.listdir(APP_ROOT):
         if item.startswith("."):
