@@ -6,7 +6,8 @@
   <string>aws.conn.tray</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/bin/python3</string>
+    <!-- インストーラで作成される .venv の Python を指定してください -->
+    <string>/Users/YOUR_USERNAME/aws-conn-tray/.venv/bin/python3</string>
     <string>/Users/YOUR_USERNAME/aws-conn-tray/tray_app.py</string>
   </array>
   <key>WorkingDirectory</key>
