@@ -19,7 +19,6 @@ from typing import Any, Dict, List, Optional
 import shutil
 
 from aws_conn_tray import installer_core
-from aws_conn_tray import wx_tray
 
 
 # ===== ヘルパー =====
@@ -28,8 +27,10 @@ from aws_conn_tray import wx_tray
 def build_config_data(forwards: List[Dict[str, str]], globals_raw: Dict[str, str]) -> Dict[str, Any]:
     """
     Tk の入力値から config.json 相当の dict を生成する。
-    wx_tray.validate_settings_input を利用してバリデーションする。
+    wx_tray.validate_settings_input を利用してバリデーションする（wx 依存なし）。
     """
+    from aws_conn_tray import wx_tray  # 遅延インポートで wx の有無に影響されないようにする
+
     data = {
         "forwards": forwards,
         "sso_start_url": globals_raw.get("sso_start_url", ""),
