@@ -693,7 +693,7 @@ class InstallerWizard:
             dirty = calc_dirty()
             if dirty:
                 self.state["sso_login_ok"] = False
-            save_state = "normal" if dirty else "disabled"
+            save_state = "normal" if dirty and not missing else "disabled"
             login_state = "normal" if not missing else "disabled"
             save_btn.config(state=save_state)
             login_btn.config(state=login_state)
