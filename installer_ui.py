@@ -602,6 +602,9 @@ class InstallerWizard:
         current_profile = self.sso_profile_var.get().strip() or "default"
         current_cfg = _load_sso_profile_config(current_profile)
 
+        mode_text = "既存プロファイルを編集" if current_cfg else "新規プロファイルを作成"
+        tk.Label(dialog, text=mode_text, fg="blue").pack(anchor="w", padx=10, pady=4)
+
         def add_field(label, key, default=""):
             row = tk.Frame(dialog)
             row.pack(fill="x", padx=10, pady=3)
@@ -609,6 +612,8 @@ class InstallerWizard:
             var = tk.StringVar(value=default)
             entries[key] = var
             tk.Entry(row, textvariable=var, width=40).pack(side="left")
+            if key in {"sso_start_url", "sso_region", "sso_account_id", "sso_role_name"}:
+                tk.Button(row, text="ペースト", command=lambda v=var: v.set(self._paste_clipboard())).pack(side="left", padx=4)
 
         add_field("プロファイル名", "profile", current_profile or "default")
         add_field("SSO Start URL", "sso_start_url", current_cfg.get("sso_start_url", ""))
