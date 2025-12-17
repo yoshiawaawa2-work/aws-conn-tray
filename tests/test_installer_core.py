@@ -90,9 +90,81 @@ def test_perform_install_preview(monkeypatch, tmp_path):
     monkeypatch.setattr(installer_core, "preinstall_check", lambda: installer_core.PreinstallResult(ok=True, issues=[], suggested_installs=[]))
     called = {}
     monkeypatch.setattr(installer_core, "install_app", lambda *a, **k: called.setdefault("install", True))
+    monkeypatch.setattr(installer_core, "setup_venv_and_install_deps", lambda *a, **k: (True, [], []))
 
     opts = installer_core.InstallOptions(install_dir=tmp_path, preview=True)
     res = installer_core.perform_install(opts)
 
     assert res.ok is True
     assert called == {}  # preview では install_app を呼ばない
+
+
+def test_install_app_copies_runtime_only(tmp_path, monkeypatch):
+    src = tmp_path / "src"
+    src.mkdir()
+    # allowed items
+    (src / "tray_app.py").write_text("print('x')", encoding="utf-8")
+    (src / "app_utils.py").write_text("x", encoding="utf-8")
+    (src / "uninstaller.py").write_text("x", encoding="utf-8")
+    (src / "uninstaller_ui.py").write_text("x", encoding="utf-8")
+    (src / "requirements.txt").write_text("req", encoding="utf-8")
+    (src / "README.md").write_text("readme", encoding="utf-8")
+    for d in ["aws_conn_tray", "config", "icons", "systemd"]:
+        p = src / d
+        p.mkdir()
+        (p / "keep.txt").write_text("keep", encoding="utf-8")
+    # disallowed items
+    (src / "tests").mkdir()
+    (src / "doc").mkdir()
+    (src / "installer_ui.py").write_text("y", encoding="utf-8")
+
+    monkeypatch.setattr(installer_core, "APP_ROOT", src)
+    monkeypatch.setattr(installer_core, "generate_autostart_entries", lambda *_a, **_k: [])
+
+    dest = tmp_path / "dest"
+    shortcuts = tmp_path / "auto"
+    installer_core.install_app(dest, shortcuts_dir=shortcuts, config_data={"forwards": []})
+
+    # allowed present
+    assert (dest / "tray_app.py").exists()
+    assert (dest / "aws_conn_tray").exists()
+    # disallowed absent
+    assert not (dest / "tests").exists()
+    assert not (dest / "doc").exists()
+    assert not (dest / "installer_ui.py").exists()
+
+
+def test_perform_install_runs_venv(monkeypatch, tmp_path):
+    monkeypatch.setattr(installer_core, "preinstall_check", lambda: installer_core.PreinstallResult(ok=True, issues=[], suggested_installs=[]))
+    monkeypatch.setattr(installer_core, "install_app", lambda *a, **k: [])
+    venv_called = {}
+
+    def fake_setup(dirpath, runner=None):
+        venv_called["dir"] = dirpath
+        return True, [], [["venv"], ["pip"]]
+
+    monkeypatch.setattr(installer_core, "setup_venv_and_install_deps", fake_setup)
+    monkeypatch.setattr(installer_core, "enable_autostart", lambda *a, **k: [])
+
+    opts = installer_core.InstallOptions(install_dir=tmp_path, preview=False)
+    res = installer_core.perform_install(opts)
+
+    assert res.ok is True
+    assert venv_called["dir"] == tmp_path
+    assert ["venv"] in res.executed_commands
+
+
+def test_perform_install_fail_venv(monkeypatch, tmp_path):
+    monkeypatch.setattr(installer_core, "preinstall_check", lambda: installer_core.PreinstallResult(ok=True, issues=[], suggested_installs=[]))
+    monkeypatch.setattr(installer_core, "install_app", lambda *a, **k: [])
+
+    def fake_setup(dirpath, runner=None):
+        return False, ["err"], [["venv"]]
+
+    monkeypatch.setattr(installer_core, "setup_venv_and_install_deps", fake_setup)
+    opts = installer_core.InstallOptions(install_dir=tmp_path, preview=False)
+    res = installer_core.perform_install(opts)
+
+    assert res.ok is False
+    assert "err" in res.issues
+    assert ["venv"] in res.executed_commands
