@@ -640,7 +640,8 @@ class InstallerWizard:
             mode_text_initial = "既存プロファイルを編集" if current_cfg else "新規プロファイルを作成"
 
         mode_var = tk.StringVar(value=mode_text_initial)
-        tk.Label(dialog, textvariable=mode_var, fg="blue").pack(anchor="w", padx=10, pady=4)
+        mode_label = tk.Label(dialog, textvariable=mode_var, fg="blue")
+        mode_label.pack(anchor="w", padx=10, pady=4)
 
         def add_field(label, key, default=""):
             row = tk.Frame(dialog)
@@ -806,6 +807,9 @@ class InstallerWizard:
         # 変更検知でボタン状態更新
         for var in entries.values():
             var.trace_add("write", lambda *_: update_buttons())
+        # 初期メッセージ（新規作成時は強調）
+        if mode_text_initial == "新規プロファイルを作成":
+            log_line("新規プロファイル作成モードです。")
         update_buttons()
 
     def _auto_install_suggestions(self):
