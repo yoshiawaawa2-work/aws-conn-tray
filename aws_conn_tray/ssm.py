@@ -23,6 +23,8 @@ def _cleanup_lingering_sessions(reason: str = "") -> None:
     過去の session-manager-plugin / aws ssm start-session が残っていると
     ポートが開放されないままになるケースがあるため、起動前に掃除する。
     OS ごとに利用可能な仕組みで緩やかに終了を試みる。
+    - psutil があればクロスプラットフォームに安全終了
+    - Windows は taskkill、Linux/macOS は pgrep+kill でフォールバック
     """
     patterns: List[str] = ["session-manager-plugin", "aws ssm start-session"]
     if reason:
@@ -111,6 +113,7 @@ def _log_port_occupant(port: int) -> None:
     """
     ポートを誰が掴んでいるかをログに出力（利用可能なら ss/lsof を利用）。
     Linux 限定の補助。その他 OS ではスキップ。
+    psutil があればそちらを優先し、プロセス名や PID を詳細に残す。
     """
     if PSUTIL_AVAILABLE:
         try:
@@ -156,6 +159,9 @@ class SsmPortForward:
     """
     1 つのポートフォワードセッションを管理する。
     name を保持することでログや通知でどのフォワードか識別しやすくする。
+    - start(): 衝突チェック→不要プロセス掃除→start-session 起動
+    - stop(): セッション終了とポート解放待ち
+    - is_alive(): プロセス存否のみ確認
     """
 
     def __init__(self, target: ForwardTarget) -> None:
@@ -164,7 +170,7 @@ class SsmPortForward:
         self.proc: Optional[subprocess.Popen] = None
 
     def start(self) -> bool:
-        # 念のため既存プロセスを整理
+        # 念のため既存プロセスを整理（残存 session-manager-plugin がポートを握っていないか確認）
         self.stop()
         _cleanup_lingering_sessions("before start")
         # ローカルポート衝突を確認（他プロセスが掴んでいる場合は待機→諦める）
@@ -216,6 +222,12 @@ class SsmPortForward:
         return self.proc.poll() is None
 
     def stop(self):
+        """
+        start-session を終了させ、ローカルポートが解放されるまで待つ。
+        - POSIX はプロセスグループごと kill して子の session-manager-plugin も巻き込む
+        - Windows は terminate→kill で終了
+        - ポートが解放されない場合はログに誰が掴んでいるかを出力
+        """
         if self.proc is None:
             return
         if self.proc.poll() is None:

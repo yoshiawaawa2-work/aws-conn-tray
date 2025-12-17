@@ -207,7 +207,9 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
 class WxTrayApp:
     """
     wxPython ベースのトレイアプリ。
-    wx が無い、または DISPLAY 無しの場合は ImportError/RuntimeError を投げる。
+    - 隠しフレーム + TaskBarIcon で常駐
+    - SSO/SSM/設定ダイアログ/ミニダイアログ/Qt WebView を統合的に扱う
+    - wx が無い、または DISPLAY 無しの場合は ImportError/RuntimeError を投げる。
     """
 
     def __init__(self):
@@ -244,6 +246,10 @@ class WxTrayApp:
         return True
 
     def init_tray(self, callbacks: dict, config: Optional[Config] = None):
+        """
+        設定を読み込み、フォワード実行体を初期化し、トレイアイコンと監視タイマーをセット。
+        callbacks にはメニュー操作のハンドラを渡せる（未指定はデフォルトにフォールバック）。
+        """
         self.config = config or load_config()
         # 複数フォワードを ForwardRuntime として準備
         self.forward_states = {}
@@ -570,6 +576,7 @@ class WxTrayApp:
         - タブ名は name を入力するとリアルタイムに反映する。
         - instance_id / profile / region / remote_host / sso_start_url にはペーストボタンを付与。
         - グローバル数値設定にはデフォルト値復元ボタンを付与。
+        - 必須/数値のバリデーションは validate_settings_input で実施。
         """
         if wx is None or not _has_display():
             return None

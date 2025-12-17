@@ -4,11 +4,11 @@ import os
 import subprocess
 import sys
 
+import psutil
 from aws_conn_tray.config_loader import load_config
 from aws_conn_tray.logger import notify
 from aws_conn_tray.prerequisites import ensure_supported_os, check_prerequisites
 from aws_conn_tray.single_instance import SingleInstanceLock
-import psutil
 
 
 def _parse_args(argv=None):
@@ -31,6 +31,9 @@ def _is_main_running() -> bool:
 def _restart_running_app():
     """
     既存の tray_app プロセスを終了させて再起動する。psutil が無い場合は何もしない。
+    - 自分自身は対象外
+    - terminate→wait でできるだけ穏当な終了を試みる
+    - ロック解放待ちを挟んでから再起動を投げる
     """
     try:
         me = os.getpid()
@@ -109,6 +112,8 @@ def _run_settings_only():
 def main(argv=None):
     """
     wxPython 版のみを起動するエントリポイント。
+    --settings が指定された場合は設定編集のみ行い、本体は起動しない。
+    それ以外は単一インスタンスロックを取り、本体を起動する。
     """
     args = _parse_args(argv)
     if getattr(args, "settings", False):
