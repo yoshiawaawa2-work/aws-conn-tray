@@ -61,6 +61,10 @@ def preinstall_check(sso_profile: Optional[str] = None) -> PreinstallResult:
 
 
 def _build_install_suggestions(sso_profile: Optional[str] = None) -> List[List[str]]:
+    """
+    OS ごとに不足コンポーネントを導入するためのコマンド例を返す。
+    sso_profile が指定された場合は最後に `aws configure sso --profile <name>` も追加。
+    """
     suggestions: List[List[str]] = []
     py_win = "python"
     py_unix = "python3"
@@ -165,6 +169,7 @@ def _map_os_id_to_pkg_mgr(os_id: str) -> str:
 
 
 def _venv_python_path(install_dir: Path) -> Path:
+    """インストール先の venv にある Python パスを返す（存在確認は呼び出し側で行う）。"""
     return install_dir / ".venv" / ("Scripts" if platforms.is_windows() else "bin") / ("python.exe" if platforms.is_windows() else "python")
 
 
@@ -637,6 +642,15 @@ class UninstallResult:
 
 
 def perform_install(opts: InstallOptions, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> InstallResult:
+    """
+    インストールのメインフローをまとめた関数。
+    1) 前提チェック（simulate_precheck_fail で強制失敗も可）
+    2) preview の場合は推奨コマンドだけ返して終了
+    3) 配布ファイルを必要最小限コピー（tests/doc 等は除外）、config を生成
+    4) インストール先に venv を作成し requirements を導入（失敗時はクリーンアップ）
+    5) 自動起動エントリを生成・有効化（autostart が True の場合）
+    6) メタデータを書き出し、結果を InstallResult で返す
+    """
     issues: List[str] = []
     executed: List[List[str]] = []
     pre = preinstall_check(sso_profile=opts.sso_profile)
@@ -684,6 +698,8 @@ def perform_install(opts: InstallOptions, runner: Callable[..., subprocess.Compl
 def perform_uninstall(opts: UninstallOptions, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> UninstallResult:
     """
     自動起動解除 → ファイル削除を行う。preview=True の場合は削除せず対象のみ返す。
+    - install_dir/shortcuts_dir はメタデータ・デフォルトを考慮して呼び出し元で決定する
+    - preview ならコマンド実行も行わず、削除予定パスとコマンドを返すだけ
     """
     install_dir = opts.install_dir.expanduser()
     shortcuts_dir = opts.shortcuts_dir or default_paths().get("autostart_dir")
