@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>AWS Conn Tray 配布用ドキュメント</title>
+  <style>
+    body { font-family: "Noto Sans JP", "Helvetica Neue", Arial, sans-serif; line-height: 1.6; color: #222; margin: 24px; }
+    h1, h2, h3 { color: #0b4f6c; }
+    code { background: #f6f6f6; padding: 2px 4px; border-radius: 3px; }
+    ul { margin-top: 0; }
+    .note { background: #f0f7ff; padding: 8px 12px; border-left: 4px solid #0b4f6c; }
+    .warn { background: #fff4e5; padding: 8px 12px; border-left: 4px solid #ff8a00; }
+  </style>
+</head>
+<body>
+  <h1>AWS Conn Tray 配布ガイド</h1>
+  <p>このドキュメントは、インストーラ/アンインストーラを含めた配布パッケージに同梱する想定の詳細手順です。GUI/Tk ウィザードを前提にしていますが、CLI も同等の機能を提供します。</p>
+
+  <h2>1. 同梱ファイルの例</h2>
+  <ul>
+    <li><code>installer_ui.py</code> / <code>installer.py</code>（インストーラ: GUI/CLI）</li>
+    <li><code>uninstaller_ui.py</code> / <code>uninstaller.py</code>（アンインストーラ: GUI/CLI）</li>
+    <li><code>run_installer_windows.bat</code> / <code>run_installer_macos.command</code> / <code>run_installer_linux.sh</code>（ダブルクリック起動用ラッパー）</li>
+    <li><code>run_uninstaller_windows.bat</code> / <code>run_uninstaller_macos.command</code> / <code>run_uninstaller_linux.sh</code></li>
+    <li><code>tray_app.py</code>（本体エントリポイント）</li>
+    <li><code>autostart_gui.py</code>（自動起動トグル GUI/CLI）</li>
+    <li><code>aws_conn_tray/</code>（本体ライブラリ一式）</li>
+    <li><code>config/config.example.json</code>（設定サンプル）</li>
+    <li><code>requirements.txt</code> / <code>requirements-dev.txt</code>（依存定義）</li>
+    <li><code>doc/</code>（本ドキュメントや各種仕様/テンプレート）</li>
+  </ul>
+
+  <h2>2. 前提条件</h2>
+  <ul>
+    <li>OS: Linux (systemd 想定) / Windows 10+ / macOS 12+</li>
+    <li>Python 3.10+ が利用可能であること（インストーラがインストール先に venv を作成）</li>
+    <li>AWS CLI v2 / Session Manager Plugin が導入済み</li>
+    <li><code>aws configure sso</code> を完了済み（GUI から既存プロファイルの読込・新規追加も可）</li>
+    <li>tkinter が利用可能（Linux では <code>python3-tk</code> を追加パッケージで導入）</li>
+  </ul>
+  <div class="note">インストーラは前提チェックを自動で行い、不足がある場合は推奨コマンドを表示します（プレビュー時は表示のみ）。</div>
+
+  <h2>3. インストール手順</h2>
+  <h3>3-0. ダブルクリックで起動する場合</h3>
+  <ul>
+    <li><strong>Windows:</strong> <code>run_installer_windows.bat</code> をダブルクリック。同梱の Python / <code>.venv</code> を優先し、見つからない場合は GUI ダイアログで確認のうえ <code>winget install -e --id Python.Python</code> を実行します（UAC で管理者権限が求められる場合があります）。</li>
+    <li><strong>macOS:</strong> <code>run_installer_macos.command</code> をダブルクリック（必要なら <code>chmod +x</code>）。同梱や <code>python3</code> が無い場合はダイアログで確認のうえ <code>brew install python</code> を実行します。</li>
+    <li><strong>Linux:</strong> <code>run_installer_linux.sh</code> を実行（必要なら <code>chmod +x</code>）。Python が無い場合は GUI (zenity/kdialog) もしくはプロンプトで確認のうえ <code>apt-get</code>/<code>dnf</code>/<code>zypper</code> で <code>python3</code> を導入します（sudo が必要）。</li>
+  </ul>
+  <h3>3-1. GUI インストーラ（推奨）</h3>
+  <ol>
+    <li>ターミナルで配布フォルダに移動し、<code>python installer_ui.py</code> を実行。</li>
+    <li>「前提チェック」で不足がなければ「次へ」。不足があれば推奨コマンドを確認し整備。</li>
+    <li>インストール先とショートカット先を確認（任意で変更）。</li>
+    <li>「確認」で内容を確認し「インストール」を押下。</li>
+    <li>進捗バーが完了したら「完了」を押下して終了。</li>
+  </ol>
+  <p>実行される処理の概要:</p>
+  <ul>
+    <li>インストール先に <code>.venv</code> を作成し、<code>pip install -r requirements.txt</code></li>
+    <li>最低限のファイルのみコピー（テスト・ドキュメントを除外）</li>
+    <li>自動起動エントリとショートカットを OS ごとに生成（いずれも <code>.venv</code> の Python と <code>tray_app.py</code> を呼び出す）</li>
+    <li>インストールメタデータを保存（アンインストールで使用）</li>
+  </ul>
+
+  <h3>3-2. CLI インストーラ</h3>
+  <pre><code>python installer.py --install-dir ~/aws-conn-tray
+# プレビューのみ（書き込みなし）
+python installer.py --install-dir ~/aws-conn-tray --preview</code></pre>
+
+  <h2>4. アンインストール手順</h2>
+  <h3>4-1. GUI アンインストーラ</h3>
+  <p>ダブルクリックで起動する場合:</p>
+  <ul>
+    <li><strong>Windows:</strong> <code>run_uninstaller_windows.bat</code>（Python 未導入時は GUI で確認のうえ winget で導入可）</li>
+    <li><strong>macOS:</strong> <code>run_uninstaller_macos.command</code>（Python 未導入時はダイアログ確認のうえ brew で導入可）</li>
+    <li><strong>Linux:</strong> <code>run_uninstaller_linux.sh</code>（Python 未導入時は GUI/プロンプト確認のうえ apt/dnf/zypper で導入可）</li>
+  </ul>
+  <ol>
+    <li><code>python uninstaller_ui.py</code> を実行。</li>
+    <li>メタデータが見つかる場合はパスがロックされ編集不可。見つからない場合はデフォルトパスを編集可。</li>
+    <li>「確認」で削除対象を確認し、「アンインストール」を押下。</li>
+    <li>自動起動解除 → ショートカット削除 → インストール先削除 → メタデータ削除を順に実行。</li>
+  </ol>
+  <h3>4-2. CLI アンインストーラ</h3>
+  <pre><code>python uninstaller.py --install-dir ~/aws-conn-tray</code></pre>
+  <div class="warn">依存導入に失敗した場合はインストーラが自動でクリーンアップし、インストールを中断します。</div>
+
+  <h2>5. 使い方（本体アプリ）</h2>
+  <ul>
+    <li>通常起動: <code>python tray_app.py</code>（単一インスタンスロックで二重起動を防止）</li>
+    <li>設定のみ開く: <code>python tray_app.py --settings</code>（本体は起動せず、起動中の場合のみ保存後に再起動）</li>
+  </ul>
+  <h3>トレイメニュー</h3>
+  <ul>
+    <li>⚙️ 設定: タブ形式で <code>config.json</code> を編集。必須チェック・デフォルト/ペーストボタン付き。保存時は起動中なら自動再起動。</li>
+    <li>SSO ログイン: 認可 URL を取得し、Qt WebView（失敗時はブラウザ）でログイン。トークン失効時はミニダイアログと通知を表示。</li>
+    <li>全フォワード再接続 / 個別再接続: SSM ポートフォワードを再起動。衝突時はリトライ＋通知。</li>
+    <li>終了: アプリを終了。</li>
+  </ul>
+  <h3>自動起動トグル</h3>
+  <ul>
+    <li>ショートカット「AWS Conn Tray - 自動起動解除」または <code>python autostart_gui.py</code> を実行。</li>
+    <li>現在の登録状態を表示し、「自動起動登録/解除」ボタンでトグル。状態表示は操作直後に更新。</li>
+  </ul>
+
+  <h2>6. リリースノート（抜粋）</h2>
+  <ul>
+    <li><strong>インストーラ刷新</strong>: Tk ウィザードで前提チェック → venv 作成 → 依存導入 → 自動起動生成まで一括実行。プレビューモード対応。</li>
+    <li><strong>設定専用起動</strong>: <code>tray_app.py --settings</code> で本体を起動せず設定のみ編集。起動中の場合のみ保存後に再起動。</li>
+    <li><strong>自動起動 GUI</strong>: 登録状態の可視化とワンクリックトグルを追加。各 OS で <code>.venv</code> の Python を使うエントリを生成。</li>
+    <li><strong>単一インスタンスロック</strong>: fasteners（フォールバックあり）で二重起動を防止。</li>
+    <li><strong>SSO/設定 UX 強化</strong>: 既存プロファイルのプルダウン読込、新規追加、必須チェック、デフォルト/ペーストボタンを実装。ログイン結果でウィザードの遷移可否を制御。</li>
+  </ul>
+
+  <h2>7. トラブルシュート</h2>
+  <ul>
+    <li>tkinter が無くインストーラが起動しない: Linux は <code>sudo apt-get install -y python3-tk</code> を実行。</li>
+    <li>Qt WebView が開かない/落ちる: 通知やミニダイアログの「開く」からブラウザでログインする。</li>
+    <li>二重起動メッセージが出る: 既存プロセスを終了してから再起動。</li>
+    <li>依存導入で失敗: ログを確認し、再インストール。失敗時は自動クリーンアップされます。</li>
+  </ul>
+</body>
+</html>

@@ -35,6 +35,10 @@ Linux / Windows / macOS の 3OS で動作し、インストーラが仮想環境
 
 ## インストール方法
 ### 1. GUI インストーラ（推奨）
+ダブルクリック用ラッパー同梱（Python 未導入時は確認のうえ winget/brew/apt-dnf-zypper で導入を試みます）:
+- Windows: `run_installer_windows.bat`
+- macOS: `run_installer_macos.command`（必要に応じて `chmod +x`）
+- Linux: `run_installer_linux.sh`（必要に応じて `chmod +x`）
 ```bash
 python installer_ui.py           # 実インストール
 python installer_ui.py --preview # プレビューモード: ファイルは書き込みません
@@ -93,7 +97,7 @@ Linux で tkinter が無い場合は `sudo apt-get install -y python3-tk` を追
 GUI のデフォルトボタン/ペーストボタンを併用すると入力が簡単です。
 
 ## アンインストール
-- GUI アンインストーラ: `python uninstaller_ui.py`  
+- GUI アンインストーラ: `python uninstaller_ui.py`（ダブルクリック用ラッパー: Windows `run_uninstaller_windows.bat` / macOS `run_uninstaller_macos.command` / Linux `run_uninstaller_linux.sh`）  
 - CLI: `python uninstaller.py --install-dir <path>`  
 - インストールメタデータを確認し、自動起動解除 → ショートカット削除 → インストール先削除 → メタデータ削除の順に安全にクリーンアップします。プレビューモードも利用可能です（`--preview`）。
 
