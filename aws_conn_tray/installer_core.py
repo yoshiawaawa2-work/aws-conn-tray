@@ -367,13 +367,18 @@ def generate_autostart_entries(install_dir: Path, shortcuts_dir: Path, python_ex
 def create_zip(src_root: Path, build_dir: Path, zip_name: str = "aws-conn-tray-installer.zip") -> Path:
     """
     build_dir に ZIP を作成する。既存のファイルは上書き。
+    - src_root が build_dir 配下にある場合でも中身を正しく含める。
+      （build_dir 自体を除外したいのは、リポジトリ直下を zip にするケースのみ）
     """
     build_dir.mkdir(parents=True, exist_ok=True)
     zip_path = build_dir / zip_name
+    build_dir_resolved = build_dir.resolve()
+    src_root_resolved = src_root.resolve()
+    src_in_build = src_root_resolved.is_relative_to(build_dir_resolved)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for path in src_root.rglob("*"):
-            # build ディレクトリ自身は含めない
-            if build_dir in path.parents:
+            # build ディレクトリ自身は含めない（ただし src_root 配下の場合は含める）
+            if build_dir_resolved in path.resolve().parents and not src_in_build:
                 continue
             zf.write(path, path.relative_to(src_root))
     return zip_path
