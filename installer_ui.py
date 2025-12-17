@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import threading
 import sys
+import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
@@ -56,10 +57,38 @@ def _parse_args():
     p.add_argument("--config", default=None, help="既存 config.json のパス")
     p.add_argument("--no-autostart", action="store_true")
     p.add_argument("--auto-install-missing", action="store_true")
+    p.add_argument("--sso-profile", default=None, help="SSO プロファイル名")
     p.add_argument("--simulate-precheck-fail", action="store_true", help="テスト用: 前提チェックを強制失敗させる")
     p.add_argument("--allow-unsupported-os", action="store_true", help="未対応OSでも起動を許可（テスト用）")
     p.add_argument("--simulate-unsupported-os", action="store_true", help="未対応OSをシミュレートして終了動作を確認（テスト用）")
     return p.parse_args()
+
+
+def _get_sso_profiles(config_path: Optional[Path] = None) -> List[str]:
+    """
+    ~/.aws/config (もしくは AWS_CONFIG_FILE) から SSO 設定を持つプロファイル一覧を返す。
+    """
+    profiles: List[str] = []
+    cfg_path = Path(config_path) if config_path else Path(os.environ.get("AWS_CONFIG_FILE", Path.home() / ".aws" / "config"))
+    if not cfg_path.exists():
+        return profiles
+    try:
+        import configparser
+
+        parser = configparser.ConfigParser()
+        parser.read(cfg_path, encoding="utf-8")
+        for section in parser.sections():
+            if section == "default":
+                prof = "default"
+            elif section.startswith("profile "):
+                prof = section.replace("profile ", "", 1)
+            else:
+                continue
+            if parser.get(section, "sso_start_url", fallback="") and parser.get(section, "sso_region", fallback=""):
+                profiles.append(prof)
+    except Exception:
+        pass
+    return profiles
 
 
 def _ensure_supported_os(args) -> bool:
@@ -94,6 +123,7 @@ def perform(opts, preview: bool, config_data=None) -> installer_core.InstallResu
         autostart=not opts.no_autostart,
         auto_install_missing=opts.auto_install_missing,
         preview=preview,
+        sso_profile=getattr(opts, "sso_profile", None),
         simulate_precheck_fail=getattr(opts, "simulate_precheck_fail", False),
     )
     return installer_core.perform_install(install_opts)
@@ -116,7 +146,7 @@ def run_headless(args):
 
 
 class InstallerWizard:
-    def __init__(self, root: tk.Tk, preview: bool = False, simulate_precheck_fail: bool = False):
+    def __init__(self, root: tk.Tk, preview: bool = False, simulate_precheck_fail: bool = False, sso_profile: Optional[str] = None):
         self.root = root
         self.root.title("aws-conn-tray インストーラ")
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -129,6 +159,9 @@ class InstallerWizard:
             "install_dir": str(installer_core.default_paths()["install"]),
             "autostart": True,
             "auto_install_missing": False,
+            "sso_profile": sso_profile or "",
+            "sso_login_ok": False,
+            "aws_ok": True,
             "forwards": [
                 {
                     "name": "rds",
@@ -155,6 +188,7 @@ class InstallerWizard:
         self.back_button: Optional[tk.Button] = None
         self.next_button: Optional[tk.Button] = None
         self.nav_frame: Optional[tk.Frame] = None
+        self.sso_profiles: List[str] = _get_sso_profiles()
         self._build_steps()
         self._show_step(0)
 
@@ -180,11 +214,19 @@ class InstallerWizard:
             command=self._auto_install_suggestions,
         ).pack(anchor="w", padx=10, pady=2)
         tk.Button(frame, text="再チェック", command=self._run_precheck).pack(anchor="e", padx=10, pady=5)
+        sso_row = tk.Frame(frame)
+        sso_row.pack(fill="x", padx=10, pady=2)
+        tk.Label(sso_row, text="SSOプロファイル").pack(side="left")
+        self.sso_profile_var = tk.StringVar(value=self.state.get("sso_profile", ""))
+        self.sso_profile_cb = ttk.Combobox(sso_row, textvariable=self.sso_profile_var, values=self.sso_profiles, width=18)
+        self.sso_profile_cb.pack(side="left", padx=5)
+        self.sso_button = tk.Button(sso_row, text="SSO設定", command=self._open_sso_config_dialog)
+        self.sso_button.pack(side="left")
         self._run_precheck()
         return frame
 
     def _run_precheck(self):
-        res = installer_core.preinstall_check()
+        res = installer_core.preinstall_check(sso_profile=self.sso_profile_var.get().strip() or None)
         if self.simulate_precheck_fail:
             # テスト用: 強制的に失敗させ、推奨コマンドも埋める
             suggested = res.suggested_installs or installer_core._build_install_suggestions()  # type: ignore[attr-defined]
@@ -192,6 +234,11 @@ class InstallerWizard:
         self.state["precheck_ok"] = res.ok
         self.state["precheck_issues"] = res.issues
         self.state["precheck_suggested"] = res.suggested_installs
+        self.state["sso_profile"] = self.sso_profile_var.get().strip()
+        self.state["aws_ok"] = not any("aws CLI v2" in issue for issue in res.issues)
+        # SSO ログイン成功状態をリセット（設定変更時は再ログインが必要）
+        if not res.ok:
+            self.state["sso_login_ok"] = False
         self.precheck_text.configure(state="normal")
         self.precheck_text.delete("1.0", "end")
         if res.ok:
@@ -207,6 +254,14 @@ class InstallerWizard:
         self.precheck_text.configure(state="disabled")
         # ボタン状態を更新（プレチェック未完の場合は「次へ」を無効化）
         self._update_nav_labels()
+        if hasattr(self, "sso_button"):
+            state = "normal" if self.state.get("aws_ok", False) else "disabled"
+            self.sso_button.config(state=state)
+            if hasattr(self, "sso_profile_cb"):
+                cb_state = "readonly"
+                if not self.state.get("aws_ok", False):
+                    cb_state = "disabled"
+                self.sso_profile_cb.config(state=cb_state, values=self.sso_profiles)
 
     def _build_path_autostart(self) -> tk.Frame:
         frame = tk.Frame(self.content)
@@ -385,6 +440,9 @@ class InstallerWizard:
         if self.current_step == 0 and not self.state.get("precheck_ok", False):
             messagebox.showerror("前提条件エラー", "前提条件を満たしていません。再チェックの上、解消してください。")
             return
+        if self.current_step == 0 and self.state.get("sso_profile") and not self.state.get("sso_login_ok"):
+            messagebox.showerror("SSO 未完了", "SSO 設定/ログインを実行し、成功させてください。")
+            return
         if self.current_step == 1:  # 保存
             self.state["install_dir"] = self.install_var.get()
             self.state["autostart"] = self.autostart_var.get()
@@ -467,6 +525,7 @@ class InstallerWizard:
                 config=None,
                 no_autostart=not self.state["autostart"],
                 auto_install_missing=self.state.get("auto_install_missing", False),
+                sso_profile=self.state.get("sso_profile") or None,
             )
             res = perform(opts, preview=self.preview, config_data=cfg_data)
             self.result = res
@@ -476,6 +535,95 @@ class InstallerWizard:
             self._show_step(len(self.frames) - 1)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _open_sso_config_dialog(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("aws configure sso")
+        entries = {}
+
+        def add_field(label, key, default=""):
+            row = tk.Frame(dialog)
+            row.pack(fill="x", padx=10, pady=3)
+            tk.Label(row, text=label, width=18, anchor="w").pack(side="left")
+            var = tk.StringVar(value=default)
+            entries[key] = var
+            tk.Entry(row, textvariable=var, width=40).pack(side="left")
+
+        add_field("プロファイル名", "profile", self.sso_profile_var.get() or "default")
+        add_field("SSO Start URL", "sso_start_url", "")
+        add_field("SSO リージョン", "sso_region", "")
+        add_field("SSO アカウントID", "sso_account_id", "")
+        add_field("SSO ロール名", "sso_role_name", "")
+
+        log = tk.Text(dialog, height=8, width=60, state="disabled")
+        log.pack(padx=10, pady=5)
+
+        def log_line(msg: str):
+            log.configure(state="normal")
+            log.insert("end", msg + "\n")
+            log.see("end")
+            log.configure(state="disabled")
+
+        def on_save_and_login():
+            profile = entries["profile"].get().strip()
+            if not profile:
+                messagebox.showerror("入力エラー", "プロファイル名を入力してください。")
+                return
+            cfg_path = Path.home() / ".aws" / "config"
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            import configparser
+
+            parser = configparser.ConfigParser()
+            if cfg_path.exists():
+                parser.read(cfg_path, encoding="utf-8")
+            section = "default" if profile == "default" else f"profile {profile}"
+            if section not in parser:
+                parser.add_section(section)
+            parser.set(section, "sso_start_url", entries["sso_start_url"].get().strip())
+            parser.set(section, "sso_region", entries["sso_region"].get().strip())
+            if entries["sso_account_id"].get().strip():
+                parser.set(section, "sso_account_id", entries["sso_account_id"].get().strip())
+            if entries["sso_role_name"].get().strip():
+                parser.set(section, "sso_role_name", entries["sso_role_name"].get().strip())
+            with cfg_path.open("w", encoding="utf-8") as f:
+                parser.write(f)
+            log_line(f"~/.aws/config に {section} を保存しました。")
+            self.sso_profile_var.set(profile)
+            # プロファイル一覧を更新
+            self.sso_profiles = _get_sso_profiles()
+            if hasattr(self, "sso_profile_cb"):
+                self.sso_profile_cb.config(values=self.sso_profiles)
+            # 設定編集画面へ反映
+            if self.global_vars and "sso_start_url" in self.global_vars and entries["sso_start_url"].get().strip():
+                self.global_vars["sso_start_url"].set(entries["sso_start_url"].get().strip())
+            if self.forward_frames:
+                first = self.forward_frames[0]
+                vars_map = first if isinstance(first, dict) and "vars" not in first else first.get("vars", first)
+                if "profile" in vars_map and not vars_map["profile"].get().strip():
+                    vars_map["profile"].set(profile)
+
+            # aws sso login を実行（ブラウザはユーザー任せ）
+            cmd = ["aws", "sso", "login", "--profile", profile]
+            log_line("aws sso login を実行しています...")
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True)
+                if proc.stdout:
+                    log_line(proc.stdout.strip())
+                if proc.stderr:
+                    log_line(proc.stderr.strip())
+                if proc.returncode == 0:
+                    log_line("SSO ログインが完了しました。")
+                    self.state["sso_login_ok"] = True
+                else:
+                    log_line(f"SSO ログインに失敗しました (rc={proc.returncode})")
+            except Exception as e:
+                log_line(f"SSO ログイン実行に失敗しました: {e}")
+            self._run_precheck()
+
+        btn_row = tk.Frame(dialog)
+        btn_row.pack(pady=5)
+        tk.Button(btn_row, text="設定してログイン", command=on_save_and_login).pack(side="left", padx=5)
+        tk.Button(btn_row, text="閉じる", command=dialog.destroy).pack(side="left", padx=5)
 
     def _auto_install_suggestions(self):
         suggested = self.state.get("precheck_suggested") or []
