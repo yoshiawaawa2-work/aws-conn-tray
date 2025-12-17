@@ -156,15 +156,54 @@ def test_perform_install_runs_venv(monkeypatch, tmp_path):
 
 def test_perform_install_fail_venv(monkeypatch, tmp_path):
     monkeypatch.setattr(installer_core, "preinstall_check", lambda: installer_core.PreinstallResult(ok=True, issues=[], suggested_installs=[]))
-    monkeypatch.setattr(installer_core, "install_app", lambda *a, **k: [])
+    install_dir = tmp_path / "app"
+    shortcuts_dir = tmp_path / "auto"
+
+    def fake_install_app(install_dir_arg, shortcuts_dir=None, config_source=None, config_data=None, python_executable=None):
+        install_dir_arg.mkdir(parents=True, exist_ok=True)
+        if shortcuts_dir:
+            shortcuts_dir.mkdir(parents=True, exist_ok=True)
+        (install_dir_arg / "tray_app.py").write_text("x", encoding="utf-8")
+        return []
+
+    monkeypatch.setattr(installer_core, "install_app", fake_install_app)
 
     def fake_setup(dirpath, runner=None):
         return False, ["err"], [["venv"]]
 
     monkeypatch.setattr(installer_core, "setup_venv_and_install_deps", fake_setup)
-    opts = installer_core.InstallOptions(install_dir=tmp_path, preview=False)
+    opts = installer_core.InstallOptions(install_dir=install_dir, shortcuts_dir=shortcuts_dir, preview=False)
     res = installer_core.perform_install(opts)
 
     assert res.ok is False
     assert "err" in res.issues
     assert ["venv"] in res.executed_commands
+    # 失敗時はクリーンアップされる
+    assert not install_dir.exists()
+    assert not shortcuts_dir.exists()
+
+
+def test_simulate_precheck_fail(monkeypatch, tmp_path):
+    monkeypatch.setattr(installer_core, "install_app", lambda *a, **k: [])
+    monkeypatch.setattr(installer_core, "setup_venv_and_install_deps", lambda *a, **k: (True, [], []))
+    opts = installer_core.InstallOptions(install_dir=tmp_path, simulate_precheck_fail=True)
+    res = installer_core.perform_install(opts)
+    assert res.ok is False
+    assert any("simulate_precheck_fail" in s for s in res.issues)
+
+
+def test_detect_linux_pkg_mgr_by_env(monkeypatch):
+    monkeypatch.setenv("AWS_CONN_TRAY_OS_ID", "fedora")
+    mgr = installer_core._detect_linux_pkg_mgr()
+    assert mgr == "dnf"
+    monkeypatch.setenv("AWS_CONN_TRAY_OS_ID", "opensuse")
+    mgr = installer_core._detect_linux_pkg_mgr()
+    assert mgr == "zypper"
+
+
+def test_build_install_suggestions_python_cmd(monkeypatch):
+    monkeypatch.setattr(installer_core.platforms, "is_windows", lambda: True)
+    monkeypatch.setattr(installer_core.platforms, "is_macos", lambda: False)
+    monkeypatch.setattr(installer_core.platforms, "is_linux", lambda: False)
+    suggestions = installer_core._build_install_suggestions()
+    assert any(cmd[:3] == ["python", "-m", "pip"] for cmd in suggestions)
