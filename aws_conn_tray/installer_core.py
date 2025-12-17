@@ -31,7 +31,7 @@ def _which(cmd: str) -> Optional[str]:
 
 def preinstall_check() -> PreinstallResult:
     """
-    Python/awscli/session-manager-plugin/psutil を確認し、足りない場合は推奨インストールコマンドを提示する。
+    Python/awscli/session-manager-plugin/psutil/venv を確認し、足りない場合は推奨インストールコマンドを提示する。
     """
     issues: List[str] = []
     suggested: List[List[str]] = []
@@ -47,6 +47,11 @@ def preinstall_check() -> PreinstallResult:
         import psutil  # noqa: F401
     except Exception:
         issues.append("psutil が見つかりません。")
+    # venv が利用可能かを確認
+    try:
+        import venv  # noqa: F401
+    except Exception:
+        issues.append("Python venv モジュールが利用できません。")
 
     if issues:
         suggested = _build_install_suggestions()
@@ -59,17 +64,20 @@ def _build_install_suggestions() -> List[List[str]]:
             ["winget", "install", "--id", "Amazon.AWSCLI"],
             ["winget", "install", "--id", "Amazon.SessionManagerPlugin"],
             [sys.executable or "python", "-m", "pip", "install", "psutil"],
+            [sys.executable or "python", "-m", "pip", "install", "virtualenv"],  # venv 代替案
         ]
     if platforms.is_macos():
         return [
             ["brew", "install", "awscli"],
             ["brew", "install", "--cask", "session-manager-plugin"],
             [sys.executable or "python3", "-m", "pip", "install", "psutil"],
+            [sys.executable or "python3", "-m", "pip", "install", "virtualenv"],
         ]
     # Linux (例: apt 前提。実際の環境に合わせてユーザーが変更することを想定)
     return [
         ["sudo", "apt-get", "install", "-y", "awscli", "session-manager-plugin"],
         [sys.executable or "python3", "-m", "pip", "install", "psutil"],
+        ["sudo", "apt-get", "install", "-y", "python3-venv"],
     ]
 
 
@@ -85,6 +93,53 @@ def run_commands(commands: List[List[str]], runner: Callable[..., subprocess.Com
         except Exception:
             results.append((cmd, 1))
     return results
+
+
+# ===== インストールメタデータ =====
+
+
+def _metadata_file() -> Path:
+    """
+    インストールメタデータを記録するファイルパスを返す。
+    """
+    return Path.home() / ".aws-conn-tray" / "install_meta.json"
+
+
+def load_install_metadata() -> Optional[Dict[str, str]]:
+    path = _metadata_file()
+    if not path.exists():
+        return None
+    try:
+        import json
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return None
+        return {"install_dir": data.get("install_dir"), "shortcuts_dir": data.get("shortcuts_dir")}
+    except Exception:
+        return None
+
+
+def save_install_metadata(install_dir: Path, shortcuts_dir: Optional[Path]) -> None:
+    path = _metadata_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    import json
+
+    payload = {
+        "install_dir": str(install_dir),
+        "shortcuts_dir": str(shortcuts_dir) if shortcuts_dir else None,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def clear_install_metadata() -> None:
+    path = _metadata_file()
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
 
 
 # ===== インストール/アンインストール先パス =====
@@ -132,18 +187,19 @@ def prepare_config(target_dir: Path, source_config: Optional[Path] = None, data:
 # ===== 自動起動エントリ生成 =====
 
 
-def generate_linux_autostart(install_dir: Path, shortcuts_dir: Path) -> List[Path]:
+def generate_linux_autostart(install_dir: Path, shortcuts_dir: Path, python_executable: Optional[str] = None) -> List[Path]:
     shortcuts_dir.mkdir(parents=True, exist_ok=True)
     entries = []
+    py = python_executable or sys.executable or "python3"
     desktop_templates = {
         "aws-conn-tray.desktop": {
             "Name": "AWS Conn Tray",
-            "Exec": f"{sys.executable} {install_dir / 'tray_app.py'}",
+            "Exec": f"{py} {install_dir / 'tray_app.py'}",
             "Comment": "AWS SSO/SSM tray app",
         },
         "aws-conn-tray-settings.desktop": {
             "Name": "AWS Conn Tray - 設定編集",
-            "Exec": f"{sys.executable} {install_dir / 'tray_app.py'} --settings",
+            "Exec": f"{py} {install_dir / 'tray_app.py'} --settings",
             "Comment": "設定ダイアログを開く",
         },
         "aws-conn-tray-disable-autostart.desktop": {
@@ -169,14 +225,15 @@ def generate_linux_autostart(install_dir: Path, shortcuts_dir: Path) -> List[Pat
     return entries
 
 
-def generate_windows_shortcuts(install_dir: Path, shortcuts_dir: Path) -> List[Path]:
+def generate_windows_shortcuts(install_dir: Path, shortcuts_dir: Path, python_executable: Optional[str] = None) -> List[Path]:
     """
     実際の .lnk ではなく .cmd のラッパーを配置する（テスト環境で安全に扱えるように）。
     """
     shortcuts_dir.mkdir(parents=True, exist_ok=True)
+    py = python_executable or str(Path(sys.executable or "python").resolve())
     scripts = {
-        "AWS Conn Tray (起動).cmd": f'@echo off\n"{sys.executable}" "{install_dir / "tray_app.py"}"\n',
-        "AWS Conn Tray (設定).cmd": f'@echo off\n"{sys.executable}" "{install_dir / "tray_app.py"}" --settings\n',
+        "AWS Conn Tray (起動).cmd": f'@echo off\n"{py}" "{install_dir / "tray_app.py"}"\n',
+        "AWS Conn Tray (設定).cmd": f'@echo off\n"{py}" "{install_dir / "tray_app.py"}" --settings\n',
         "AWS Conn Tray (自動起動解除).cmd": '@echo off\nschtasks /Delete /TN "AWS Conn Tray" /F\n',
     }
     paths: List[Path] = []
@@ -187,11 +244,12 @@ def generate_windows_shortcuts(install_dir: Path, shortcuts_dir: Path) -> List[P
     return paths
 
 
-def generate_macos_shortcuts(install_dir: Path, shortcuts_dir: Path) -> List[Path]:
+def generate_macos_shortcuts(install_dir: Path, shortcuts_dir: Path, python_executable: Optional[str] = None) -> List[Path]:
     shortcuts_dir.mkdir(parents=True, exist_ok=True)
+    py = python_executable or (sys.executable or "python3")
     scripts = {
-        "AWS Conn Tray 起動.command": f'#!/bin/bash\n"{sys.executable}" "{install_dir / "tray_app.py"}"\n',
-        "AWS Conn Tray 設定.command": f'#!/bin/bash\n"{sys.executable}" "{install_dir / "tray_app.py"}" --settings\n',
+        "AWS Conn Tray 起動.command": f'#!/bin/bash\n"{py}" "{install_dir / "tray_app.py"}"\n',
+        "AWS Conn Tray 設定.command": f'#!/bin/bash\n"{py}" "{install_dir / "tray_app.py"}" --settings\n',
         "AWS Conn Tray 自動起動解除.command": '#!/bin/bash\nlaunchctl unload ~/Library/LaunchAgents/aws.conn.tray.plist\n',
     }
     paths: List[Path] = []
@@ -203,12 +261,12 @@ def generate_macos_shortcuts(install_dir: Path, shortcuts_dir: Path) -> List[Pat
     return paths
 
 
-def generate_autostart_entries(install_dir: Path, shortcuts_dir: Path) -> List[Path]:
+def generate_autostart_entries(install_dir: Path, shortcuts_dir: Path, python_executable: Optional[str] = None) -> List[Path]:
     if platforms.is_windows():
-        return generate_windows_shortcuts(install_dir, shortcuts_dir)
+        return generate_windows_shortcuts(install_dir, shortcuts_dir, python_executable=python_executable)
     if platforms.is_macos():
-        return generate_macos_shortcuts(install_dir, shortcuts_dir)
-    return generate_linux_autostart(install_dir, shortcuts_dir)
+        return generate_macos_shortcuts(install_dir, shortcuts_dir, python_executable=python_executable)
+    return generate_linux_autostart(install_dir, shortcuts_dir, python_executable=python_executable)
 
 
 # ===== パッケージング =====
@@ -259,28 +317,73 @@ def install_app(
     shortcuts_dir: Optional[Path] = None,
     config_source: Optional[Path] = None,
     config_data: Optional[Dict[str, Any]] = None,
+    python_executable: Optional[str] = None,
 ) -> List[Path]:
     """
     指定されたディレクトリにアプリをコピーし、ショートカット/自動起動用のファイルを生成する。
+    - 配布物に含めるのは実行に必要な最低限のファイルのみ（テスト・ドキュメントは除外）
     """
     install_dir = install_dir.expanduser()
     install_dir.mkdir(parents=True, exist_ok=True)
-    # アプリ本体をコピー（build 配布を前提に、APP_ROOT から一式コピー）
+    runtime_dirs = {"aws_conn_tray", "config", "icons", "systemd"}
+    runtime_files = {"tray_app.py", "app_utils.py", "uninstaller.py", "uninstaller_ui.py", "requirements.txt", "README.md"}
+
     for item in os.listdir(APP_ROOT):
-        if item in {"build", "__pycache__", ".git", ".venv"}:
+        if item.startswith("."):
             continue
         src = Path(APP_ROOT) / item
         dst = install_dir / item
         if src.is_dir():
-            shutil.copytree(src, dst, dirs_exist_ok=True)
-        else:
+            if item in runtime_dirs:
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+            continue
+        if item in runtime_files:
             shutil.copy2(src, dst)
 
     prepare_config(install_dir, source_config=config_source, data=config_data)
 
     shortcuts_dir = shortcuts_dir or default_paths().get("autostart_dir", install_dir / "shortcuts")
-    entries = generate_autostart_entries(install_dir, shortcuts_dir)
+    entries = generate_autostart_entries(install_dir, shortcuts_dir, python_executable=python_executable)
     return entries
+
+
+def setup_venv_and_install_deps(install_dir: Path, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> Tuple[bool, List[str], List[List[str]]]:
+    """
+    インストール先に venv を作成し、requirements.txt をインストールする。
+    返り値: (ok, issues, executed_commands)
+    """
+    issues: List[str] = []
+    executed: List[List[str]] = []
+    venv_dir = install_dir / ".venv"
+    python_cmd = sys.executable or "python3"
+    cmd_venv = [python_cmd, "-m", "venv", str(venv_dir)]
+    executed.append(cmd_venv)
+    try:
+        res = runner(cmd_venv, check=False)
+        if getattr(res, "returncode", 0) != 0:
+            issues.append("仮想環境の作成に失敗しました。")
+            return False, issues, executed
+    except Exception as e:
+        issues.append(f"仮想環境の作成に失敗しました: {e}")
+        return False, issues, executed
+
+    pip_path = venv_dir / ("Scripts" if platforms.is_windows() else "bin") / ("pip.exe" if platforms.is_windows() else "pip")
+    req = install_dir / "requirements.txt"
+    if not req.exists():
+        issues.append("requirements.txt が見つかりません。")
+        return False, issues, executed
+    cmd_pip = [str(pip_path), "install", "-r", str(req)]
+    executed.append(cmd_pip)
+    try:
+        res = runner(cmd_pip, check=False)
+        if getattr(res, "returncode", 0) != 0:
+            issues.append("依存パッケージのインストールに失敗しました。")
+            return False, issues, executed
+    except Exception as e:
+        issues.append(f"依存パッケージのインストールに失敗しました: {e}")
+        return False, issues, executed
+
+    return True, issues, executed
 
 
 def uninstall_app(install_dir: Path, shortcuts_dir: Optional[Path] = None) -> None:
@@ -302,8 +405,9 @@ def uninstall_app(install_dir: Path, shortcuts_dir: Optional[Path] = None) -> No
 
 def enable_autostart(install_dir: Path, dry_run: bool = False, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> List[List[str]]:
     cmds: List[List[str]] = []
+    venv_python = install_dir / ".venv" / ("Scripts" if platforms.is_windows() else "bin") / ("python.exe" if platforms.is_windows() else "python")
+    py_exec = str(venv_python) if venv_python.exists() else str(Path(sys.executable or "python").resolve())
     if platforms.is_windows():
-        exe = str(Path(sys.executable or "python").resolve())
         task_cmd = [
             "schtasks",
             "/Create",
@@ -312,7 +416,7 @@ def enable_autostart(install_dir: Path, dry_run: bool = False, runner: Callable[
             "/SC",
             "ONLOGON",
             "/TR",
-            f'"{exe}" "{install_dir / "tray_app.py"}"',
+            f'"{py_exec}" "{install_dir / "tray_app.py"}"',
         ]
         cmds.append(task_cmd)
     elif platforms.is_macos():
@@ -378,6 +482,21 @@ class InstallResult:
     executed_commands: List[List[str]] = field(default_factory=list)
 
 
+@dataclass
+class UninstallOptions:
+    install_dir: Path
+    shortcuts_dir: Optional[Path] = None
+    preview: bool = False
+
+
+@dataclass
+class UninstallResult:
+    ok: bool
+    issues: List[str] = field(default_factory=list)
+    targets: List[Path] = field(default_factory=list)
+    executed_commands: List[List[str]] = field(default_factory=list)
+
+
 def perform_install(opts: InstallOptions, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> InstallResult:
     issues: List[str] = []
     executed: List[List[str]] = []
@@ -392,12 +511,51 @@ def perform_install(opts: InstallOptions, runner: Callable[..., subprocess.Compl
     if opts.preview:
         return InstallResult(ok=True, issues=[], entries=[], executed_commands=pre.suggested_installs)
 
+    venv_python = Path(opts.install_dir) / ".venv" / ("Scripts" if platforms.is_windows() else "bin") / ("python.exe" if platforms.is_windows() else "python")
     entries = install_app(
         opts.install_dir,
         shortcuts_dir=opts.shortcuts_dir,
         config_source=None if opts.use_example_config else opts.config_source,
         config_data=opts.config_data if not opts.use_example_config else None,
+        python_executable=str(venv_python),
     )
+    ok_venv, venv_issues, venv_cmds = setup_venv_and_install_deps(opts.install_dir, runner=runner)
+    executed.extend(venv_cmds)
+    if venv_issues:
+        issues.extend(venv_issues)
+        return InstallResult(ok=False, issues=issues, entries=entries, executed_commands=executed)
     if opts.autostart:
         executed.extend(enable_autostart(opts.install_dir, dry_run=False, runner=runner))
+    # インストール完了後にメタデータを記録
+    try:
+        save_install_metadata(opts.install_dir, opts.shortcuts_dir or default_paths().get("autostart_dir"))
+    except Exception:
+        pass
     return InstallResult(ok=True, issues=issues, entries=entries, executed_commands=executed)
+
+
+def perform_uninstall(opts: UninstallOptions, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> UninstallResult:
+    """
+    自動起動解除 → ファイル削除を行う。preview=True の場合は削除せず対象のみ返す。
+    """
+    install_dir = opts.install_dir.expanduser()
+    shortcuts_dir = opts.shortcuts_dir or default_paths().get("autostart_dir")
+    targets: List[Path] = []
+    if shortcuts_dir:
+        targets.append(shortcuts_dir)
+    targets.append(install_dir)
+
+    executed = disable_autostart(dry_run=opts.preview, runner=runner)
+    if opts.preview:
+        return UninstallResult(ok=True, issues=[], targets=targets, executed_commands=executed)
+
+    uninstall_app(install_dir, shortcuts_dir=shortcuts_dir)
+    try:
+        meta = load_install_metadata()
+        if meta:
+            meta_install = Path(meta.get("install_dir", "")).expanduser()
+            if meta_install == install_dir:
+                clear_install_metadata()
+    except Exception:
+        pass
+    return UninstallResult(ok=True, issues=[], targets=targets, executed_commands=executed)

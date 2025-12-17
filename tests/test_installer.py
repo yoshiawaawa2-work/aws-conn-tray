@@ -1,6 +1,8 @@
 import argparse
 from types import SimpleNamespace
 
+import pytest
+
 import installer_ui
 
 
@@ -42,3 +44,129 @@ def test_build_config_data(monkeypatch):
     }
     cfg = installer_ui.build_config_data(forwards, globals_raw)
     assert cfg["forwards"][0]["local_port"] == 15432
+
+
+def test_build_config_data_invalid_port():
+    forwards = [
+        {
+            "name": "rds",
+            "instance_id": "i-1",
+            "profile": "p",
+            "region": "r",
+            "remote_host": "h",
+            "remote_port": "5432",
+            "local_port": "bad",
+        }
+    ]
+    globals_raw = {
+        "sso_start_url": "https://start",
+        "sso_login_timeout_seconds": "900",
+        "sso_auto_refresh_margin_seconds": "300",
+        "tunnel_check_interval_seconds": "10",
+    }
+    with pytest.raises(ValueError):
+        installer_ui.build_config_data(forwards, globals_raw)
+
+
+def test_next_step_updates_confirm(monkeypatch):
+    # InstallerWizard を最小限のダミー状態で検証
+    class DummyVar:
+        def __init__(self, v):
+            self.v = v
+
+        def get(self):
+            return self.v
+
+    wiz = installer_ui.InstallerWizard.__new__(installer_ui.InstallerWizard)
+    wiz.state = {"globals": {}}
+    wiz.current_step = 2  # 設定画面から確認画面に進むケース
+    wiz.frames = [None, None, None, None, None, None]
+
+    wiz.forward_frames = [
+        {
+            "vars": {
+                "name": DummyVar("rds"),
+                "instance_id": DummyVar("i-1"),
+                "profile": DummyVar("p"),
+                "region": DummyVar("r"),
+                "remote_host": DummyVar("h"),
+                "remote_port": DummyVar("5432"),
+                "local_port": DummyVar("15432"),
+            }
+        }
+    ]
+    wiz.global_vars = {
+        "sso_start_url": DummyVar("https://start"),
+        "sso_login_timeout_seconds": DummyVar("900"),
+        "sso_auto_refresh_margin_seconds": DummyVar("300"),
+        "tunnel_check_interval_seconds": DummyVar("10"),
+    }
+    called = {"confirm": False, "show": None}
+    wiz._update_confirm = lambda: called.__setitem__("confirm", True)
+    wiz._start_install = lambda: None
+    wiz._show_step = lambda idx: called.__setitem__("show", idx)
+
+    installer_ui.InstallerWizard.next_step(wiz)
+    # 確認画面に遷移し、_update_confirm が呼ばれていること
+    assert called["confirm"] is True
+    assert called["show"] == 3
+
+
+def test_nav_label_changes_to_install():
+    class DummyBtn:
+        def __init__(self):
+            self.kwargs = {}
+
+        def config(self, **kwargs):
+            self.kwargs.update(kwargs)
+
+    wiz = installer_ui.InstallerWizard.__new__(installer_ui.InstallerWizard)
+    wiz.frames = [None] * 6
+    wiz.current_step = 3
+    wiz.back_button = DummyBtn()
+    wiz.next_button = DummyBtn()
+    installer_ui.InstallerWizard._update_nav_labels(wiz)
+    assert wiz.next_button.kwargs.get("text") == "インストール"
+
+
+def test_next_step_blocks_when_precheck_failed(monkeypatch):
+    calls = {}
+
+    class DummyBtn:
+        def __init__(self):
+            self.kwargs = {}
+
+        def config(self, **kwargs):
+            self.kwargs.update(kwargs)
+
+    wiz = installer_ui.InstallerWizard.__new__(installer_ui.InstallerWizard)
+    wiz.current_step = 0
+    wiz.state = {"precheck_ok": False, "globals": {}}
+    wiz.frames = [None, None]
+    wiz.back_button = DummyBtn()
+    wiz.next_button = DummyBtn()
+    wiz._update_nav_labels = lambda: None
+    wiz._show_step = lambda idx: calls.setdefault("show", idx)
+    monkeypatch.setattr(installer_ui, "messagebox", type("MB", (), {"showerror": lambda *a, **k: calls.setdefault("error", True)}))
+
+    installer_ui.InstallerWizard.next_step(wiz)
+    assert calls.get("error") is True
+    assert "show" not in calls  # 遷移しない
+
+
+def test_nav_disabled_when_precheck_failed():
+    class DummyBtn:
+        def __init__(self):
+            self.kwargs = {}
+
+        def config(self, **kwargs):
+            self.kwargs.update(kwargs)
+
+    wiz = installer_ui.InstallerWizard.__new__(installer_ui.InstallerWizard)
+    wiz.frames = [None, None]
+    wiz.current_step = 0
+    wiz.state = {"precheck_ok": False}
+    wiz.back_button = DummyBtn()
+    wiz.next_button = DummyBtn()
+    installer_ui.InstallerWizard._update_nav_labels(wiz)
+    assert wiz.next_button.kwargs.get("state") == "disabled"

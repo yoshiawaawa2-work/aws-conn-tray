@@ -90,9 +90,14 @@ def run_headless(args):
 
 
 class InstallerWizard:
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, preview: bool = False):
         self.root = root
         self.root.title("aws-conn-tray インストーラ")
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.preview = preview
+        # コンテンツ領域（ナビゲーションは別フレームで下部固定）
+        self.content = tk.Frame(self.root)
+        self.content.pack(fill="both", expand=True)
         self.state: Dict[str, Any] = {
             "install_dir": str(installer_core.default_paths()["install"]),
             "autostart": True,
@@ -120,6 +125,9 @@ class InstallerWizard:
         self.progress_var = tk.DoubleVar(value=0)
         self.log_widget: Optional[tk.Text] = None
         self.result: Optional[installer_core.InstallResult] = None
+        self.back_button: Optional[tk.Button] = None
+        self.next_button: Optional[tk.Button] = None
+        self.nav_frame: Optional[tk.Frame] = None
         self._build_steps()
         self._show_step(0)
 
@@ -135,11 +143,15 @@ class InstallerWizard:
         ]
 
     def _build_welcome(self) -> tk.Frame:
-        frame = tk.Frame(self.root)
+        frame = tk.Frame(self.content)
         tk.Label(frame, text="ようこそ", font=("Arial", 14, "bold")).pack(anchor="w", padx=10, pady=5)
         self.precheck_text = tk.Text(frame, height=8, width=70, state="disabled")
         self.precheck_text.pack(padx=10, pady=5)
-        tk.Checkbutton(frame, text="前提不足時に推奨コマンドを自動実行（自己責任）", variable=tk.BooleanVar(value=self.state["auto_install_missing"]), command=lambda: self.state.__setitem__("auto_install_missing", not not self.state.get("auto_install_missing"))).pack(anchor="w", padx=10)
+        tk.Button(
+            frame,
+            text="前提不足時に推奨コマンドを自動実行",
+            command=self._auto_install_suggestions,
+        ).pack(anchor="w", padx=10, pady=2)
         tk.Button(frame, text="再チェック", command=self._run_precheck).pack(anchor="e", padx=10, pady=5)
         self._run_precheck()
         return frame
@@ -148,6 +160,7 @@ class InstallerWizard:
         res = installer_core.preinstall_check()
         self.state["precheck_ok"] = res.ok
         self.state["precheck_issues"] = res.issues
+        self.state["precheck_suggested"] = res.suggested_installs
         self.precheck_text.configure(state="normal")
         self.precheck_text.delete("1.0", "end")
         if res.ok:
@@ -161,9 +174,11 @@ class InstallerWizard:
                 for cmd in res.suggested_installs:
                     self.precheck_text.insert("end", " ".join(cmd) + "\n")
         self.precheck_text.configure(state="disabled")
+        # ボタン状態を更新（プレチェック未完の場合は「次へ」を無効化）
+        self._update_nav_labels()
 
     def _build_path_autostart(self) -> tk.Frame:
-        frame = tk.Frame(self.root)
+        frame = tk.Frame(self.content)
         tk.Label(frame, text="インストール先", font=("Arial", 12, "bold")).grid(row=0, column=0, sticky="w", padx=5, pady=5, columnspan=2)
         self.install_var = tk.StringVar(value=self.state["install_dir"])
         tk.Entry(frame, textvariable=self.install_var, width=50).grid(row=1, column=0, padx=5, pady=5)
@@ -178,11 +193,11 @@ class InstallerWizard:
             self.install_var.set(path)
 
     def _build_config_editor(self) -> tk.Frame:
-        frame = tk.Frame(self.root)
+        frame = tk.Frame(self.content)
         tk.Label(frame, text="設定編集", font=("Arial", 12, "bold")).pack(anchor="w", padx=5, pady=5)
-        self.forward_frames: List[Dict[str, tk.StringVar]] = []
-        self.forwards_container = tk.Frame(frame)
-        self.forwards_container.pack(fill="both", expand=True, padx=5)
+        self.forward_frames: List[Dict[str, Any]] = []
+        self.forward_notebook = ttk.Notebook(frame)
+        self.forward_notebook.pack(fill="both", expand=True, padx=5, pady=5)
         tk.Button(frame, text="フォワード追加", command=self._add_forward).pack(anchor="w", padx=5, pady=5)
 
         globals_frame = tk.LabelFrame(frame, text="グローバル設定")
@@ -201,7 +216,19 @@ class InstallerWizard:
             ("tunnel_check_interval_seconds", "監視間隔(秒)"),
         ]:
             tk.Label(globals_frame, text=label).grid(row=row, column=0, sticky="w", padx=5, pady=2)
-            tk.Entry(globals_frame, textvariable=self.global_vars[key], width=40).grid(row=row, column=1, padx=5, pady=2)
+            entry = tk.Entry(globals_frame, textvariable=self.global_vars[key], width=40)
+            entry.grid(row=row, column=1, padx=5, pady=2)
+            btn_frame = tk.Frame(globals_frame)
+            btn_frame.grid(row=row, column=2, padx=5, pady=2)
+            if key == "sso_start_url":
+                tk.Button(btn_frame, text="ペースト", command=lambda v=self.global_vars[key]: v.set(self._paste_clipboard())).pack(side="left")
+            if key in {"sso_login_timeout_seconds", "sso_auto_refresh_margin_seconds", "tunnel_check_interval_seconds"}:
+                defaults = {
+                    "sso_login_timeout_seconds": "900",
+                    "sso_auto_refresh_margin_seconds": "300",
+                    "tunnel_check_interval_seconds": "10",
+                }
+                tk.Button(btn_frame, text="デフォルト", command=lambda v=self.global_vars[key], dv=defaults[key]: v.set(dv)).pack(side="left")
             row += 1
 
         for fw in self.state["forwards"]:
@@ -219,8 +246,7 @@ class InstallerWizard:
             "remote_port": "5432",
             "local_port": "15432",
         }
-        container = tk.Frame(self.forwards_container, relief="groove", borderwidth=1)
-        container.pack(fill="x", padx=5, pady=5)
+        tab = tk.Frame(self.forward_notebook)
         vars_map = {k: tk.StringVar(value=str(initial.get(k, ""))) for k in initial}
         labels = [
             ("name", "名前"),
@@ -231,21 +257,41 @@ class InstallerWizard:
             ("remote_port", "リモートポート"),
             ("local_port", "ローカルポート"),
         ]
-        for idx, (key, label) in enumerate(labels):
-            tk.Label(container, text=label).grid(row=idx, column=0, sticky="w", padx=5, pady=2)
-            tk.Entry(container, textvariable=vars_map[key], width=40).grid(row=idx, column=1, padx=5, pady=2)
-        tk.Button(container, text="削除", command=lambda c=container, v=vars_map: self._remove_forward(c, v)).grid(row=0, column=2, padx=5, pady=2)
-        self.forward_frames.append(vars_map)
+        paste_targets = {"instance_id", "profile", "region", "remote_host"}
 
-    def _remove_forward(self, frame: tk.Frame, vars_map: Dict[str, tk.StringVar]):
+        for idx, (key, label) in enumerate(labels):
+            tk.Label(tab, text=label).grid(row=idx, column=0, sticky="w", padx=5, pady=2)
+            tk.Entry(tab, textvariable=vars_map[key], width=40).grid(row=idx, column=1, padx=5, pady=2)
+            btn_box = tk.Frame(tab)
+            btn_box.grid(row=idx, column=2, padx=5, pady=2, sticky="w")
+            if key in paste_targets:
+                tk.Button(btn_box, text="ペースト", command=lambda v=vars_map[key]: v.set(self._paste_clipboard())).pack(side="left")
+
+        tk.Button(tab, text="削除", command=lambda t=tab, v=vars_map: self._remove_forward(t, v)).grid(row=0, column=3, padx=5, pady=2)
+        self.forward_notebook.add(tab, text=initial.get("name", "新規"))
+
+        def on_name_change(*_):
+            name_val = vars_map["name"].get() or "新規"
+            idx = self.forward_notebook.index(tab)
+            self.forward_notebook.tab(idx, text=name_val)
+
+        vars_map["name"].trace_add("write", on_name_change)
+        self.forward_frames.append({"vars": vars_map, "tab": tab})
+        # 新規タブにフォーカスを移動
+        self.forward_notebook.select(tab)
+
+    def _remove_forward(self, tab: tk.Frame, vars_map: Dict[str, tk.StringVar]):
         if len(self.forward_frames) <= 1:
             messagebox.showwarning("警告", "フォワードは最低1件必要です。")
             return
-        frame.destroy()
-        self.forward_frames = [v for v in self.forward_frames if v is not vars_map]
+        try:
+            self.forward_notebook.forget(tab)
+        except Exception:
+            pass
+        self.forward_frames = [item for item in self.forward_frames if item["vars"] is not vars_map]
 
     def _build_confirm(self) -> tk.Frame:
-        frame = tk.Frame(self.root)
+        frame = tk.Frame(self.content)
         tk.Label(frame, text="確認", font=("Arial", 12, "bold")).pack(anchor="w", padx=5, pady=5)
         self.confirm_text = tk.Text(frame, height=15, width=70, state="disabled")
         self.confirm_text.pack(padx=5, pady=5)
@@ -265,7 +311,7 @@ class InstallerWizard:
         self.confirm_text.configure(state="disabled")
 
     def _build_progress(self) -> tk.Frame:
-        frame = tk.Frame(self.root)
+        frame = tk.Frame(self.content)
         tk.Label(frame, text="インストール中...", font=("Arial", 12, "bold")).pack(anchor="w", padx=5, pady=5)
         self.progressbar = ttk.Progressbar(frame, mode="indeterminate", variable=self.progress_var)
         self.progressbar.pack(fill="x", padx=5, pady=5)
@@ -280,7 +326,7 @@ class InstallerWizard:
         self.progress_log.configure(state="disabled")
 
     def _build_done(self) -> tk.Frame:
-        frame = tk.Frame(self.root)
+        frame = tk.Frame(self.content)
         self.done_label = tk.Label(frame, text="", font=("Arial", 12, "bold"))
         self.done_label.pack(anchor="w", padx=5, pady=5)
         tk.Button(frame, text="完了", command=self.root.destroy).pack(pady=10)
@@ -295,26 +341,81 @@ class InstallerWizard:
         self.current_step = idx
         self.current_frame = self.frames[idx]
         self.current_frame.pack(fill="both", expand=True)
+        # 完了画面ではナビゲーションを隠す
+        if self.nav_frame:
+            if self.current_step == len(self.frames) - 1:
+                self.nav_frame.pack_forget()
+            else:
+                if not self.nav_frame.winfo_manager():
+                    self.nav_frame.pack(fill="x", side="bottom")
+        self._update_nav_labels()
 
     def next_step(self):
+        if self.current_step == 0 and not self.state.get("precheck_ok", False):
+            messagebox.showerror("前提条件エラー", "前提条件を満たしていません。再チェックの上、解消してください。")
+            return
         if self.current_step == 1:  # 保存
             self.state["install_dir"] = self.install_var.get()
             self.state["autostart"] = self.autostart_var.get()
-        if self.current_step == 2:  # 設定保存
+        if self.current_step == 2:  # 設定保存 + バリデーション
             forwards = []
-            for vars_map in self.forward_frames:
+            for item in self.forward_frames:
+                vars_map = item["vars"]
                 forwards.append({k: v.get() for k, v in vars_map.items()})
-            self.state["forwards"] = forwards
             for k, var in self.global_vars.items():
                 self.state["globals"][k] = var.get()
-        if self.current_step == 3:
+            try:
+                cfg = build_config_data(forwards, self.state["globals"])
+                self.state["forwards"] = cfg["forwards"]
+                self.state["globals"]["sso_start_url"] = cfg["sso_start_url"]
+                self.state["globals"]["sso_login_timeout_seconds"] = str(cfg["sso_login_timeout_seconds"])
+                self.state["globals"]["sso_auto_refresh_margin_seconds"] = str(cfg["sso_auto_refresh_margin_seconds"])
+                self.state["globals"]["tunnel_check_interval_seconds"] = str(cfg["tunnel_check_interval_seconds"])
+            except Exception as e:
+                messagebox.showerror("入力エラー", str(e))
+                return
+        target = min(self.current_step + 1, len(self.frames) - 1)
+        if target == 3:
             self._update_confirm()
-        if self.current_step == len(self.frames) - 3:
+        if self.current_step == 3:
             self._start_install()
-        self._show_step(min(self.current_step + 1, len(self.frames) - 1))
+        self._show_step(target)
 
     def prev_step(self):
         self._show_step(max(self.current_step - 1, 0))
+
+    def _paste_clipboard(self) -> str:
+        try:
+            return self.root.clipboard_get()
+        except Exception:
+            return ""
+
+    def set_nav_buttons(self, back_btn: tk.Button, next_btn: tk.Button, nav_frame: Optional[tk.Frame] = None):
+        self.back_button = back_btn
+        self.next_button = next_btn
+        self.nav_frame = nav_frame
+        self._update_nav_labels()
+
+    def _on_close(self):
+        # 右上の×でも中止確認を出す
+        if messagebox.askokcancel("確認", "本当にインストールを中止しますか？"):
+            self.root.destroy()
+
+    def _update_nav_labels(self):
+        if self.back_button:
+            label = "インストール中止" if self.current_step == 0 else "戻る"
+            state = "normal" if self.current_step < len(self.frames) - 1 else "disabled"
+            self.back_button.config(text=label, state=state)
+        if self.next_button:
+            if self.current_step == 3:
+                self.next_button.config(text="インストール", state="normal")
+            elif self.current_step >= len(self.frames) - 1:
+                self.next_button.config(text="次へ", state="disabled")
+            else:
+                state = "normal"
+                if self.current_step == 0 and not self.state.get("precheck_ok", False):
+                    state = "disabled"
+                self.next_button.config(text="次へ", state=state)
 
     # --- インストール処理 ---
     def _start_install(self):
@@ -336,23 +437,69 @@ class InstallerWizard:
                 no_autostart=not self.state["autostart"],
                 auto_install_missing=self.state.get("auto_install_missing", False),
             )
-            res = perform(opts, preview=False, config_data=cfg_data)
+            res = perform(opts, preview=self.preview, config_data=cfg_data)
             self.result = res
             self._log_progress("インストール完了" if res.ok else "インストール失敗")
-            self.done_label.config(text="完了しました" if res.ok else "エラーが発生しました")
+            self.done_label.config(text="インストールが完了しました！" if res.ok else "エラーが発生しました")
             self.progressbar.stop()
             self._show_step(len(self.frames) - 1)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _auto_install_suggestions(self):
+        suggested = self.state.get("precheck_suggested") or []
+        if self.state.get("precheck_ok", False):
+            messagebox.showinfo("前提条件", "前提条件はすでに満たされています。")
+            return
+        if not suggested:
+            messagebox.showinfo("前提条件", "実行可能な推奨コマンドはありません。")
+            return
+        if not messagebox.askokcancel("確認", "推奨コマンドを実行しますか？\n（自己責任で実行してください）"):
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("前提条件の自動インストール")
+        tk.Label(win, text="前提条件をインストールしています...").pack(anchor="w", padx=10, pady=5)
+        pb = ttk.Progressbar(win, mode="indeterminate")
+        pb.pack(fill="x", padx=10, pady=5)
+        log = tk.Text(win, height=8, width=60, state="disabled")
+        log.pack(padx=10, pady=5)
+
+        def log_line(msg: str):
+            log.configure(state="normal")
+            log.insert("end", msg + "\n")
+            log.see("end")
+            log.configure(state="disabled")
+
+        def worker():
+            pb.start(10)
+            results = installer_core.run_commands(suggested)
+            for cmd, rc in results:
+                log_line(f"{' '.join(cmd)} -> rc={rc}")
+            pb.stop()
+            win.after(500, win.destroy)
+            self.root.after(600, self._run_precheck)
 
         threading.Thread(target=worker, daemon=True).start()
 
 
 def run_gui(args):
     root = tk.Tk()
-    wizard = InstallerWizard(root)
+    wizard = InstallerWizard(root, preview=args.preview)
     nav = tk.Frame(root)
-    nav.pack(fill="x")
-    tk.Button(nav, text="戻る", command=wizard.prev_step).pack(side="left", padx=5, pady=5)
-    tk.Button(nav, text="次へ", command=wizard.next_step).pack(side="right", padx=5, pady=5)
+    nav.pack(fill="x", side="bottom")
+    def on_back_or_cancel():
+        if wizard.current_step == 0:
+            if messagebox.askokcancel("確認", "本当にインストールを中止しますか？"):
+                root.destroy()
+        else:
+            wizard.prev_step()
+
+    back_btn = tk.Button(nav, text="インストール中止", command=on_back_or_cancel)
+    back_btn.pack(side="left", padx=5, pady=5)
+    next_btn = tk.Button(nav, text="次へ", command=wizard.next_step)
+    next_btn.pack(side="right", padx=5, pady=5)
+    wizard.set_nav_buttons(back_btn, next_btn, nav)
     root.mainloop()
 
 
