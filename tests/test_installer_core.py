@@ -107,6 +107,7 @@ def test_install_app_copies_runtime_only(tmp_path, monkeypatch):
     (src / "app_utils.py").write_text("x", encoding="utf-8")
     (src / "uninstaller.py").write_text("x", encoding="utf-8")
     (src / "uninstaller_ui.py").write_text("x", encoding="utf-8")
+    (src / "autostart_gui.py").write_text("x", encoding="utf-8")
     (src / "requirements.txt").write_text("req", encoding="utf-8")
     (src / "README.md").write_text("readme", encoding="utf-8")
     for d in ["aws_conn_tray", "config", "icons", "systemd"]:
