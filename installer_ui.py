@@ -615,7 +615,7 @@ class InstallerWizard:
         dialog.title("aws configure sso")
         entries = {}
         current_profile = self.sso_profile_var.get().strip() or "default"
-        current_cfg = _load_sso_profile_config(current_profile)
+        current_cfg = _load_sso_profile_config(current_profile) or {}
 
         mode_var = tk.StringVar(value="既存プロファイルを編集" if current_cfg else "新規プロファイルを作成")
         tk.Label(dialog, textvariable=mode_var, fg="blue").pack(anchor="w", padx=10, pady=4)
