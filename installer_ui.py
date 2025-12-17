@@ -301,7 +301,9 @@ class InstallerWizard:
         self.sso_status_var = tk.StringVar(value="SSO ログインが完了していない場合、次へ進めません。")
         self.sso_status_label = tk.Label(frame, textvariable=self.sso_status_var, fg="red")
         self.sso_status_label.pack(anchor="w", padx=10, pady=(0, 4))
-        tk.Label(frame, text="※ SSO設定画面で「ログイン」に成功してから続行してください。", fg="red").pack(anchor="w", padx=10, pady=(0, 6))
+        self.sso_hint_var = tk.StringVar(value="※ SSO設定画面で「ログイン」に成功してから続行してください。")
+        self.sso_hint_label = tk.Label(frame, textvariable=self.sso_hint_var, fg="red")
+        self.sso_hint_label.pack(anchor="w", padx=10, pady=(0, 6))
         tk.Button(
             frame,
             text="前提不足時に推奨コマンドを自動実行",
@@ -610,10 +612,18 @@ class InstallerWizard:
             self.sso_status_var.set("SSO ログイン済みです。")
             if hasattr(self, "sso_status_label"):
                 self.sso_status_label.config(fg="green")
+            if getattr(self, "sso_hint_var", None):
+                self.sso_hint_var.set("")
+                if hasattr(self, "sso_hint_label"):
+                    self.sso_hint_label.config(fg="green")
         else:
             self.sso_status_var.set("SSO ログインが完了していない場合、次へ進めません。")
             if hasattr(self, "sso_status_label"):
                 self.sso_status_label.config(fg="red")
+            if getattr(self, "sso_hint_var", None):
+                self.sso_hint_var.set("※ SSO設定画面で「ログイン」に成功してから続行してください。")
+                if hasattr(self, "sso_hint_label"):
+                    self.sso_hint_label.config(fg="red")
 
     # --- インストール処理 ---
     def _start_install(self):
