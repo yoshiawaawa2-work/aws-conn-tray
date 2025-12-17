@@ -698,6 +698,9 @@ class InstallerWizard:
     def _open_sso_config_dialog(self):
         dialog = tk.Toplevel(self.root)
         dialog.title("aws configure sso")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.focus_set()
         entries = {}
         current_profile = self.sso_profile_var.get().strip()
         if not current_profile:
@@ -908,6 +911,9 @@ class InstallerWizard:
 
         win = tk.Toplevel(self.root)
         win.title("前提条件の自動インストール")
+        win.transient(self.root)
+        win.grab_set()
+        win.focus_set()
         tk.Label(win, text="前提条件をインストールしています...").pack(anchor="w", padx=10, pady=5)
         pb = ttk.Progressbar(win, mode="indeterminate")
         pb.pack(fill="x", padx=10, pady=5)
