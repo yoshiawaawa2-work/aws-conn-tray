@@ -249,6 +249,9 @@ class WxTrayApp:
         """
         設定を読み込み、フォワード実行体を初期化し、トレイアイコンと監視タイマーをセット。
         callbacks にはメニュー操作のハンドラを渡せる（未指定はデフォルトにフォールバック）。
+        - forward_states に ForwardRuntime を構築（ログ用 name を保持）
+        - タスクトレイに状態インジケータ + 個別再接続メニューを用意
+        - wx.Timer でトークン/トンネルの監視ループを開始
         """
         self.config = config or load_config()
         # 複数フォワードを ForwardRuntime として準備
@@ -577,6 +580,7 @@ class WxTrayApp:
         - instance_id / profile / region / remote_host / sso_start_url にはペーストボタンを付与。
         - グローバル数値設定にはデフォルト値復元ボタンを付与。
         - 必須/数値のバリデーションは validate_settings_input で実施。
+        - ShowModal の戻り値が OK なら dict を返し、キャンセル/閉じるなら None。
         """
         if wx is None or not _has_display():
             return None
@@ -738,6 +742,8 @@ class WxTrayApp:
     def _show_sso_prompt(self, auth_url: str, message: str, button_label: str = "開く"):
         """
         右下に出すミニダイアログを表示し、クリックで _launch_webview を呼ぶ。
+        - 既存表示があれば閉じて新しい内容に差し替える
+        - webview 起動中は二重起動を避ける
         """
         # 既存があればいったん閉じてメッセージを更新
         self._close_mini_prompt()
@@ -787,6 +793,8 @@ class WxTrayApp:
     def _launch_webview(self, fallback_url: str):
         """
         UI をブロックしないように認可URL取得→WebView起動をスレッドで実行。
+        - authorize URL が取れなければ start_url をブラウザで開く誘導に切り替える
+        - Qt WebView 起動中フラグ (_webview_running) を立てて二重起動を防止
         """
         def worker():
             self._webview_running = True
