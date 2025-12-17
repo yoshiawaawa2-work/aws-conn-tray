@@ -793,7 +793,7 @@ class InstallerWizard:
         tk.Button(btn_row, text="新規作成", command=on_new_profile).pack(side="left", padx=5)
         save_btn = tk.Button(btn_row, text="保存", command=on_save_only)
         save_btn.pack(side="left", padx=5)
-        login_btn = tk.Button(btn_row, text="ログインして保存", command=on_login_and_maybe_save)
+        login_btn = tk.Button(btn_row, text="保存してログイン", command=on_login_and_maybe_save)
         login_btn.pack(side="left", padx=5)
         tk.Button(btn_row, text="閉じる", command=dialog.destroy).pack(side="left", padx=5)
 
