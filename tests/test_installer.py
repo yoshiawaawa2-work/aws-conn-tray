@@ -331,3 +331,22 @@ def test_sso_required_missing():
     vals_ng["sso_region"] = ""
     missing = installer_ui._sso_required_missing(vals_ng)
     assert "SSO リージョン" in missing
+
+
+def test_apply_sso_to_ui_updates_fields():
+    class DummyVar:
+        def __init__(self, v=""):
+            self.v = v
+
+        def get(self):
+            return self.v
+
+        def set(self, v):
+            self.v = v
+
+    ff = {"vars": {"profile": DummyVar("old"), "region": DummyVar("")}}
+    globals_vars = {"sso_start_url": DummyVar("")}
+    installer_ui._apply_sso_to_ui([ff], globals_vars, "newprof", "ap-northeast-1", "https://start")
+    assert ff["vars"]["profile"].get() == "newprof"
+    assert ff["vars"]["region"].get() == "ap-northeast-1"
+    assert globals_vars["sso_start_url"].get() == "https://start"
