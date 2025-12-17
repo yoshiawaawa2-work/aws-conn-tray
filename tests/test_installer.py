@@ -170,3 +170,33 @@ def test_nav_disabled_when_precheck_failed():
     wiz.next_button = DummyBtn()
     installer_ui.InstallerWizard._update_nav_labels(wiz)
     assert wiz.next_button.kwargs.get("state") == "disabled"
+
+
+def test_simulate_precheck_fail_flag(monkeypatch):
+    wiz = installer_ui.InstallerWizard.__new__(installer_ui.InstallerWizard)
+    wiz.simulate_precheck_fail = True
+    wiz.state = {"precheck_ok": True, "precheck_issues": [], "precheck_suggested": []}
+    wiz.precheck_text = type("Dummy", (), {})()
+    wiz.precheck_text.configure = lambda **kwargs: None
+    wiz.precheck_text.delete = lambda *a, **k: None
+    wiz.precheck_text.insert = lambda *a, **k: None
+    wiz._update_nav_labels = lambda: None
+    installer_ui.InstallerWizard._run_precheck(wiz)
+    assert wiz.state["precheck_ok"] is False
+    assert "(テスト用) simulate_precheck_fail" in wiz.state["precheck_issues"][0]
+    assert wiz.state["precheck_suggested"]  # 推奨コマンドが入る
+
+
+def test_ensure_supported_os(monkeypatch):
+    args = SimpleNamespace(allow_unsupported_os=False)
+    monkeypatch.setattr(installer_ui.installer_core.platforms, "is_windows", lambda: False)
+    monkeypatch.setattr(installer_ui.installer_core.platforms, "is_macos", lambda: False)
+    monkeypatch.setattr(installer_ui.installer_core.platforms, "is_linux", lambda: False)
+    assert installer_ui._ensure_supported_os(args) is False
+
+
+def test_simulate_unsupported_os(monkeypatch):
+    args = SimpleNamespace(allow_unsupported_os=False, simulate_unsupported_os=True)
+    monkeypatch.setattr(installer_ui.installer_core.platforms, "is_windows", lambda: True)
+    # simulate flag should still force unsupported
+    assert installer_ui._ensure_supported_os(args) is False

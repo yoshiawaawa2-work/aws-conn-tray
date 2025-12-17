@@ -14,6 +14,8 @@ from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import shutil
+
 from aws_conn_tray import installer_core
 from aws_conn_tray import wx_tray
 
@@ -54,7 +56,28 @@ def _parse_args():
     p.add_argument("--config", default=None, help="既存 config.json のパス")
     p.add_argument("--no-autostart", action="store_true")
     p.add_argument("--auto-install-missing", action="store_true")
+    p.add_argument("--simulate-precheck-fail", action="store_true", help="テスト用: 前提チェックを強制失敗させる")
+    p.add_argument("--allow-unsupported-os", action="store_true", help="未対応OSでも起動を許可（テスト用）")
+    p.add_argument("--simulate-unsupported-os", action="store_true", help="未対応OSをシミュレートして終了動作を確認（テスト用）")
     return p.parse_args()
+
+
+def _ensure_supported_os(args) -> bool:
+    if getattr(args, "simulate_unsupported_os", False):
+        pass_supported = False
+    else:
+        pass_supported = installer_core.platforms.is_windows() or installer_core.platforms.is_macos() or installer_core.platforms.is_linux()
+    if pass_supported:
+        return True
+    if getattr(args, "allow_unsupported_os", False):
+        return True
+    # GUI と headless でメッセージ出力を切り替え
+    try:
+        messagebox.showerror("未対応OS", "未対応OSです。インストーラを終了します。")
+    except Exception:
+        pass
+    print("未対応OSです。インストーラを終了します。")
+    return False
 
 
 # ===== Headless 実行 =====
@@ -71,11 +94,14 @@ def perform(opts, preview: bool, config_data=None) -> installer_core.InstallResu
         autostart=not opts.no_autostart,
         auto_install_missing=opts.auto_install_missing,
         preview=preview,
+        simulate_precheck_fail=getattr(opts, "simulate_precheck_fail", False),
     )
     return installer_core.perform_install(install_opts)
 
 
 def run_headless(args):
+    if not _ensure_supported_os(args):
+        return 1
     res = perform(args, preview=args.preview, config_data=None)
     if res.ok:
         print("プレビュー完了" if args.preview else "インストール完了")
@@ -90,11 +116,12 @@ def run_headless(args):
 
 
 class InstallerWizard:
-    def __init__(self, root: tk.Tk, preview: bool = False):
+    def __init__(self, root: tk.Tk, preview: bool = False, simulate_precheck_fail: bool = False):
         self.root = root
         self.root.title("aws-conn-tray インストーラ")
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.preview = preview
+        self.simulate_precheck_fail = simulate_precheck_fail
         # コンテンツ領域（ナビゲーションは別フレームで下部固定）
         self.content = tk.Frame(self.root)
         self.content.pack(fill="both", expand=True)
@@ -158,6 +185,10 @@ class InstallerWizard:
 
     def _run_precheck(self):
         res = installer_core.preinstall_check()
+        if self.simulate_precheck_fail:
+            # テスト用: 強制的に失敗させ、推奨コマンドも埋める
+            suggested = res.suggested_installs or installer_core._build_install_suggestions()  # type: ignore[attr-defined]
+            res = installer_core.PreinstallResult(ok=False, issues=["(テスト用) simulate_precheck_fail"], suggested_installs=suggested)
         self.state["precheck_ok"] = res.ok
         self.state["precheck_issues"] = res.issues
         self.state["precheck_suggested"] = res.suggested_installs
@@ -464,6 +495,8 @@ class InstallerWizard:
         pb.pack(fill="x", padx=10, pady=5)
         log = tk.Text(win, height=8, width=60, state="disabled")
         log.pack(padx=10, pady=5)
+        close_btn = tk.Button(win, text="閉じる", state="disabled", command=lambda: win.destroy())
+        close_btn.pack(pady=5)
 
         def log_line(msg: str):
             log.configure(state="normal")
@@ -473,19 +506,43 @@ class InstallerWizard:
 
         def worker():
             pb.start(10)
-            results = installer_core.run_commands(suggested)
+            cmds_to_run = suggested
+            if installer_core.platforms.is_linux():
+                if shutil.which("pkexec"):
+                    cmds_to_run = [["pkexec", "sh", "-c", " ".join(cmd)] for cmd in suggested]
+                else:
+                    log_line("pkexec が見つからないため自動実行できません。下記コマンドを手動で実行してください。")
+                    for cmd in suggested:
+                        log_line(" ".join(cmd))
+                    pb.stop()
+                    close_btn.config(state="normal")
+                    return
+            results = installer_core.run_commands(cmds_to_run)
             for cmd, rc in results:
                 log_line(f"{' '.join(cmd)} -> rc={rc}")
             pb.stop()
-            win.after(500, win.destroy)
-            self.root.after(600, self._run_precheck)
+            check = installer_core.preinstall_check()
+            if check.ok:
+                log_line("前提条件チェック: OK")
+            else:
+                log_line("前提条件チェック: NG")
+                for issue in check.issues:
+                    log_line(f"- {issue}")
+            # メイン画面の表示を更新
+            self.state["precheck_ok"] = check.ok
+            self.state["precheck_issues"] = check.issues
+            self.state["precheck_suggested"] = check.suggested_installs
+            self.root.after(0, self._run_precheck)
+            close_btn.config(state="normal")
 
         threading.Thread(target=worker, daemon=True).start()
 
 
 def run_gui(args):
+    if not _ensure_supported_os(args):
+        return 1
     root = tk.Tk()
-    wizard = InstallerWizard(root, preview=args.preview)
+    wizard = InstallerWizard(root, preview=args.preview, simulate_precheck_fail=getattr(args, "simulate_precheck_fail", False))
     nav = tk.Frame(root)
     nav.pack(fill="x", side="bottom")
     def on_back_or_cancel():
