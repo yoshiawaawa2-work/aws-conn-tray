@@ -1,135 +1,109 @@
 
 # aws_conn_tray
 
-AWS SSO トークンと SSM ポートフォワード（RDS など）を監視し、トレイアイコンと通知で状態を知らせるデスクトップ常駐アプリです。GUI は wxPython 版のみで、認証画面表示は PySide6 + QtWebEngine のサブプロセスを利用します。  
-Linux / Windows / macOS の 3OS で動作することを目標にしています（自動起動やポート占有調査など一部は OS ごとに手順が異なります）。
+AWS SSO トークンと SSM ポートフォワード（RDS など）を監視し、トレイアイコンと通知で状態を知らせるデスクトップ常駐アプリです。  
+GUI 本体は wxPython、認証画面は QtWebEngine（PySide6 サブプロセス）で表示し、インストーラ/アンインストーラ/自動起動ツールは Tk（tkinter）で統一しています。  
+Linux / Windows / macOS の 3OS で動作し、インストーラが仮想環境の作成・依存導入・自動起動登録まで行います。
 
 ## 主な機能
-- トレイアイコン表示（wxPython）。左右クリックでメニューを開く。
-- SSO トークン期限の監視（`~/.aws/sso/cache/*.json`）。期限切れ前後で通知・ミニダイアログ表示。
-- SSO ログインフローの起動  
-  - Qt WebView を最小化で開く（失敗時はブラウザにフォールバック）。  
-  - デバイスコード入力画面を開き、`127.0.0.1/.../oauth/callback` を検知したら自動クローズ。
-- SSM ポートフォワード (`AWS-StartPortForwardingSessionToRemoteHost`) の起動・監視・自動再接続。
-- アイコン色で状態を表示  
-  - 緑: トークン有効 & ポートフォワード有効  
-  - 黄: トークン有効だが再接続中  
-  - 赤: トークン無効（再ログインが必要）
-- 設定ダイアログ（wx）で `config/config.json` を編集・バリデート可能。
-- ログを `~/.cache/aws_conn_tray/tray.log` に出力。
+- トレイ常駐: wxPython のタスクトレイに常駐し、左右クリックでメニューを開く。
+- SSO 監視と再ログイン: `~/.aws/sso/cache/*.json` を監視し、期限前後で通知・ミニダイアログ表示。Qt WebView で認証画面を非アクティブ起動し、失敗時はブラウザにフォールバック。
+- SSM ポートフォワード監視: `AWS-StartPortForwardingSessionToRemoteHost` を起動・監視・自動再接続。ローカルポート衝突時はリトライ/通知。
+- 設定編集: トレイメニューの「⚙️ 設定」、またはショートカット「AWS Conn Tray - 設定編集」で GUI 編集。必須チェック・デフォルトボタン・ペーストボタン付き。設定保存時に起動中アプリは自動再起動、未起動なら保存のみ。
+- 自動起動切替 GUI: 「AWS Conn Tray - 自動起動解除」ショートカットで開く Tk 画面から登録/解除をトグル。状態表示付き、`.venv` の Python と `tray_app.py` を使う service/plist/タスクを生成。
+- インストーラ/アンインストーラ: Tk ウィザードで前提チェック → venv 作成 → `pip install -r requirements.txt` → 最低限ファイルの配置 → 自動起動登録。アンインストーラはメタデータを参照して安全に削除。
+- 単一インスタンス: fasteners（なければポートバインド）でロックし、二重起動を防止。設定編集モードも別ロックで多重起動を抑止。
 
 ## ディレクトリ概要
-- `tray_app.py` : アプリのエントリポイント。wx アプリを起動。
-- `aws_conn_tray/` : 実装本体（SSO/SSM 監視、WebView、GUI）。
-- `config/config.example.json` : 設定サンプル。`config/config.json` をここから作る。
-- `systemd/aws-conn-tray.service` : systemd --user 用サービス定義。
-- `icons/*.png` : トレイアイコン。
-- `tests/` : 単体テスト（wx/Qt 依存テストは環境により skip）。
+- `tray_app.py` : 本体エントリポイント（`--settings` で設定編集専用起動）。
+- `aws_conn_tray/` : 本体実装（wx/SSO/SSM/ロック/インストーラ共通ロジックなど）。
+- `installer_ui.py` / `uninstaller_ui.py` : Tk ウィザードのインストーラ/アンインストーラ。
+- `installer.py` / `uninstaller.py` : CLI 版のインストーラ/アンインストーラ。
+- `autostart_gui.py` : 自動起動登録/解除 GUI・CLI トグル。
+- `config/config.example.json` : 設定サンプル。
+- `systemd/` : 参考用の systemd 雛形（インストーラは動的生成）。
+- `doc/` : ログインフロー説明、wx 仕様、auto-start テンプレート。
+- `tests/` : 単体テスト（GUI 依存は条件付き skip）。
 
 ## サポート OS と前提条件
-- OS: Linux (Ubuntu 22.x 想定) / Windows 10+ / macOS 12+  
-  - Linux: systemd ユニットで自動起動可能。ポート占有調査 (`ss`/`lsof`) やプロセス掃除 (`pgrep`) も利用。  
-  - Windows: タスク スケジューラで自動起動を設定してください（ユニットは付属しません）。`taskkill` で残存プロセスを緩やかに終了します。  
-  - macOS: LaunchAgent で自動起動を設定する想定（plist は同梱していません）。プロセス掃除は pgrep 経由で行います。
-- Python 3.10+ 推奨。
-- AWS CLI v2 / Session Manager Plugin がインストール済み。`aws configure sso` を完了していること。
-- psutil がインストール済みであること（ポート占有確認・残存プロセス掃除をクロスプラットフォームで行うため必須）。
-- GUI ツールキットは Tk (tkinter) を利用します。Linux では `python3-tk` を OS パッケージでインストールしてください。
-- 踏み台 EC2 が SSM で到達可能で、そこから対象 DB へ TCP で接続できること。
+- OS: Linux (systemd 想定) / Windows 10+ / macOS 12+  
+  - 自動起動は systemd --user / LaunchAgent / タスクスケジューラに対応。テンプレートは venv の Python とインストール先の `tray_app.py` を使う形に更新済み。  
+- Python 3.10+（インストーラがインストール先に venv を作成）。  
+- AWS CLI v2 / Session Manager Plugin / `aws configure sso` 済み。SSO プロファイルは GUI から既存読み込み＋新規追加が可能。  
+- tkinter（インストーラ・自動起動 GUI 用）。Linux は `python3-tk` を OS パッケージで導入。  
+- その他のランタイム依存は `requirements.txt` に統合（psutil / fasteners などはここで導入されます）。
 
-## セットアップ手順
+## インストール方法
+### 1. GUI インストーラ（推奨）
+```bash
+python installer_ui.py           # 実インストール
+python installer_ui.py --preview # プレビューモード: ファイルは書き込みません
+```
+- 前提チェック: Python/AWS CLI/Session Manager/venv 利用可否/SSO プロファイルを確認。不足があれば推奨コマンドを提示（プレビューは表示のみ）。  
+- venv 作成 → `pip install -r requirements.txt` を実行。失敗時はクリーンアップして終了。  
+- 必要最小限のファイルをインストール先へコピー（テスト・ドキュメント等は除外）。  
+- 自動起動とショートカットを作成（各 OS で `.venv` の Python を使うよう生成）。  
+- インストールメタデータを記録し、アンインストーラが安全に参照できるようにします。
 
-### 1. 依存パッケージのインストール
+### 2. CLI インストーラ
+```bash
+python installer.py --install-dir ~/aws-conn-tray
+```
+GUI と同じフローを非対話で実行します。
+
+### 3. 手動セットアップ（開発向け）
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
-# Linux で tkinter が無い場合は別途:
-# sudo apt-get install -y python3-tk
-```
-開発用ツールを入れる場合は `make install-dev` で `pytest/black` なども導入できます。
-
-### 2. フォルダ配置
-リポジトリをホーム配下に置く例:
-```bash
-mv aws-conn-tray ~/aws-conn-tray
-cd ~/aws-conn-tray
-```
-
-### 3. 設定ファイル作成
-```bash
 cp config/config.example.json config/config.json
+PYTHONPATH=. python tray_app.py
 ```
-主な項目（複数フォワードを `forwards` 配列で持てます）:
-- `name` : 表示用ラベル。
-- `instance_id` : 踏み台 EC2 のインスタンス ID。
-- `profile` / `region` : AWS CLI のプロファイル名・リージョン。
-- `local_port` : ローカルで待ち受けるポート。
-- `remote_host` / `remote_port` : 接続先ホスト・ポート（例: RDS のホスト/5432）。
-- `sso_start_url` : IAM Identity Center の start URL。  
-- `sso_login_timeout_seconds` : `aws sso login --no-browser` の待ち時間。
-- `sso_auto_refresh_margin_seconds` : 期限がこの秒数以内に迫ったら自動再ログインを試行。
-- `tunnel_check_interval_seconds` : トークン/トンネルの監視間隔。
+Linux で tkinter が無い場合は `sudo apt-get install -y python3-tk` を追加してください。
 
-### 4. 起動（手動）
-```bash
-PYTHONPATH=. .venv/bin/python tray_app.py
-```
-トレイにアイコンが出て、右クリックでメニューが開けば OK。
+## 自動起動とショートカット
+- インストーラが以下を生成します（いずれもインストール先の `.venv` Python と `tray_app.py` を呼び出します）。  
+  - Linux: `~/.config/systemd/user/aws-conn-tray.service` と `~/.local/share/applications/aws-conn-tray/*.desktop`（起動/設定/自動起動解除）。  
+  - Windows: スタートメニュー配下に 3 つの .cmd（起動/設定/自動起動解除）。タスクスケジューラ登録用のコマンドを自動実行。  
+  - macOS: `~/Library/LaunchAgents/aws.conn.tray.plist` と `/Applications/aws-conn-tray` 配下の .command（起動/設定/自動起動解除）。  
+- 自動起動のオン/オフは `autostart_gui.py` を起動すると GUI でトグルできます（状態表示つき）。CLI なら `python autostart_gui.py --enable|--disable`。
 
-### 5. 自動起動
+## 使い方
+- 通常起動: `python tray_app.py`（単一インスタンスロックで二重起動を防止）。  
+- 設定のみ開く: `python tray_app.py --settings`（本体は起動せず、起動中の場合のみ保存後に再起動）。  
+- トレイメニュー:  
+  - ⚙️ 設定: GUI で `config/config.json` を編集。保存後、起動中なら自動再起動。  
+  - SSO ログイン: 認可 URL 取得 → WebView（失敗時はブラウザ）でログイン。  
+  - 全フォワード再接続 / 個別再接続: ポートフォワードを再起動。  
+  - 終了: アプリを終了。
+- SSO/フォワード状態はアイコン色で表示（緑/黄/赤）。期限が近い場合は自動で再ログインを試行し、ミニダイアログと通知を出します。
 
-#### Linux (systemd --user)
-```bash
-mkdir -p ~/.config/systemd/user
-cp systemd/aws-conn-tray.service ~/.config/systemd/user/
-sed -i "s|/home/YOUR_USERNAME|$HOME|g" ~/.config/systemd/user/aws-conn-tray.service
-systemctl --user daemon-reload
-systemctl --user enable --now aws-conn-tray.service
-```
-停止・無効化:
-```bash
-systemctl --user disable --now aws-conn-tray.service
-```
+## 設定項目（config/config.json）
+- `forwards`: 複数のフォワード定義を配列で保持。  
+  - `name`: 表示名（タブ名・メニュー名）。  
+  - `instance_id`: 踏み台 EC2 のインスタンス ID。  
+  - `profile` / `region`: AWS CLI プロファイル名とリージョン。  
+  - `remote_host` / `remote_port`: 接続先ホスト/ポート（例: RDS ホスト/5432）。  
+  - `local_port`: ローカル待受ポート。衝突時はリトライ。  
+- グローバル:  
+  - `sso_start_url`: IAM Identity Center の start URL。  
+  - `sso_login_timeout_seconds`: `aws sso login --no-browser` の待ち時間。  
+  - `sso_auto_refresh_margin_seconds`: 期限がこの秒数以内なら自動再ログインを開始。  
+  - `tunnel_check_interval_seconds`: トークン/トンネルの監視頻度（秒）。  
+GUI のデフォルトボタン/ペーストボタンを併用すると入力が簡単です。
 
-#### Windows (タスク スケジューラ例)
-付属のテンプレート: `doc/autostart/windows/task_aws_conn_tray.xml`（文字コード UTF-16）
-1. 「タスク スケジューラ」を開き、「基本タスクの作成」。  
-2. トリガーは「ログオン時」。  
-3. 操作は「プログラムの開始」で以下を指定:  
-   - プログラム/スクリプト: `C:\path\to\aws-conn-tray\.venv\Scripts\python.exe`  
-   - 引数の追加: `C:\path\to\aws-conn-tray\tray_app.py`
-4. 実行ユーザーを現在のユーザーにし、必要なら「最上位の特権で実行する」を有効化。
-
-#### macOS (LaunchAgent 例)
-- 付属の plist 雛形: `doc/autostart/macos/aws.conn.tray.plist`（`YOUR_USERNAME` を置換して使用）。  
-- `launchctl load ~/Library/LaunchAgents/aws.conn.tray.plist` で読み込み、`launchctl start aws.conn.tray` で起動。  
-- `ProgramArguments` の python パスは環境に合わせて変更してください。
-
-### 6. アンインストール
-#### Linux
-```bash
-systemctl --user disable --now aws-conn-tray.service
-rm -rf ~/aws-conn-tray ~/.cache/aws_conn_tray
-rm ~/.config/systemd/user/aws-conn-tray.service
-```
-#### Windows
-- タスク スケジューラからタスクを削除。
-- インストールディレクトリ（例: `C:\aws-conn-tray`）と `C:\Users\<you>\.cache\aws_conn_tray` を削除。
-
-#### macOS
-- `launchctl unload ~/Library/LaunchAgents/aws.conn.tray.plist`
-- インストールディレクトリと `~/.cache/aws_conn_tray` を削除。
-
-## 動作のポイント
-- SSO トークン失効時は右下にミニダイアログが出て「開く」から WebView/ブラウザで再ログインできます。
-- トンネルが切れた場合は自動再接続を試行し、ローカルポート衝突が続くと通知で中止を案内します。
-- ログは `~/.cache/aws_conn_tray/tray.log`。Qt WebView のストレージは `~/.cache/aws_conn_tray/qt-webview`。
+## アンインストール
+- GUI アンインストーラ: `python uninstaller_ui.py`  
+- CLI: `python uninstaller.py --install-dir <path>`  
+- インストールメタデータを確認し、自動起動解除 → ショートカット削除 → インストール先削除 → メタデータ削除の順に安全にクリーンアップします。プレビューモードも利用可能です（`--preview`）。
 
 ## テスト
-- 単体テスト（モック中心）: `make test`
-- wx GUI を実際に回す場合: `make test-gui`（`WX_GUI_TEST=1` と DISPLAY が必要）
+- 単体テスト: `make test`（WX/Qt 依存は環境により skip）。  
+- GUI を実際に動かす検証は `WX_GUI_TEST=1 make test-gui` を使用（DISPLAY/Xvfb が必要）。  
+- インストーラ/アンインストーラはプレビューモードで副作用なく確認できます。
 
-## 既知の注意
-- 環境依存で QtWebEngine が GPU/VA-API で落ちるため、ソフトウェア描画を強制する起動フラグを付与しています。
-- 本番運用前に、SSO 設定・踏み台経路・ポート衝突などを検証環境で確認してください。
+## 既知の注意・トラブルシュート
+- QtWebEngine が GPU 周りで落ちる環境ではソフトウェア描画を強制しています。認証画面が開かない場合は通知/ミニダイアログの「開く」からブラウザでログインしてください。
+- `python installer_ui.py --preview` ではファイルはコピーされません。実行ログで前提チェックや生成コマンドのみ確認できます。
+- 二重起動が検知された場合は通知して起動を中止します（fasteners が無い場合もソケットロックで代替）。  
+- tkinter が無い環境ではインストーラ/自動起動 GUI が起動しません。Linux では `python3-tk` を追加してください。
