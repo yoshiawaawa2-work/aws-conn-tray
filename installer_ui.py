@@ -11,6 +11,7 @@ import threading
 import sys
 import os
 import subprocess
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
