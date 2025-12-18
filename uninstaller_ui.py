@@ -203,7 +203,8 @@ class UninstallWizard:
         self.current_frame = self.frames[idx]
         self.current_frame.pack(fill="both", expand=True)
         if self.nav_frame:
-            if self.current_step == len(self.frames) - 1:
+            # 進捗/完了画面ではナビゲーションを隠す
+            if self.current_step in (len(self.frames) - 1, len(self.frames) - 2):
                 self.nav_frame.pack_forget()
             else:
                 if not self.nav_frame.winfo_manager():
