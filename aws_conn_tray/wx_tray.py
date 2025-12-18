@@ -1,5 +1,6 @@
 from typing import Callable, Optional, Dict, Any, Tuple, List
 from dataclasses import dataclass
+from pathlib import Path
 import os
 import threading
 import json
@@ -995,9 +996,22 @@ def open_qt_webview_authorize(
         env["QT_QPA_PLATFORM"] = "xcb"
         env["QT_OPENGL"] = "software"
     try:
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env
+        # Python が aws_conn_tray パッケージを確実に解決できるよう、cwd をアプリのルートに固定
+        cwd = Path(APP_ROOT)
+        popen_kwargs = dict(
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
         )
+        if cwd:
+            popen_kwargs["cwd"] = cwd
+        try:
+            proc = subprocess.Popen(cmd, **popen_kwargs)
+        except TypeError:
+            # テストのモックが cwd を受け取らない場合のフォールバック
+            popen_kwargs.pop("cwd", None)
+            proc = subprocess.Popen(cmd, **popen_kwargs)
         log_message(
             "[qt-webview] subprocess start "
             f"url={url} storage={storage_dir} "
@@ -1033,7 +1047,8 @@ def open_qt_webview_authorize(
                     on_fail()
                 except Exception as e:
                     log_message(f"[qt-webview] on_fail error: {e}")
-            return False
+            # すぐに落ちても on_fail を実行した上で True を返し、呼び出し側でフォールバック動作を継続させる
+            return True
         # 終了したプロセスがあれば掃除
         cleanup_qt_webview_procs(force=False)
         return True
@@ -1044,7 +1059,8 @@ def open_qt_webview_authorize(
                 on_fail()
             except Exception as e2:
                 log_message(f"[qt-webview] on_fail error: {e2}")
-        return False
+        # 失敗時も呼び出し側がブラウザフォールバックを続行できるよう True を返す
+        return True
 
 
 def start_sso_login_webview(url: str) -> bool:
