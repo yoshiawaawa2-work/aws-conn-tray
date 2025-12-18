@@ -29,6 +29,36 @@ def _which(cmd: str) -> Optional[str]:
     return shutil.which(cmd)
 
 
+def refresh_windows_path_env() -> None:
+    """
+    Windows の最新 PATH をレジストリから読み込み、現在プロセスの PATH に反映する。
+    winget などで PATH が更新された直後でも、同一プロセス内の preinstall_check が拾えるようにする。
+    """
+    if not platforms.is_windows():
+        return
+    try:
+        import winreg
+    except Exception:
+        return
+
+    def _read_reg_path(root, subkey: str) -> str:
+        try:
+            with winreg.OpenKey(root, subkey) as key:
+                value, _ = winreg.QueryValueEx(key, "Path")
+                return value or ""
+        except Exception:
+            return ""
+
+    machine = _read_reg_path(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")
+    user = _read_reg_path(winreg.HKEY_CURRENT_USER, r"Environment")
+    combined = ";".join([p for p in [machine, user] if p])
+    if not combined:
+        return
+    # %SystemRoot% などを展開
+    parts = [os.path.expandvars(p) for p in combined.split(";") if p]
+    os.environ["PATH"] = ";".join(parts)
+
+
 def preinstall_check(sso_profile: Optional[str] = None) -> PreinstallResult:
     """
     Python/awscli/session-manager-plugin/venv を確認し、足りない場合は推奨インストールコマンドを提示する。
@@ -703,6 +733,7 @@ def perform_install(opts: InstallOptions, runner: Callable[..., subprocess.Compl
     if not pre.ok:
         if opts.auto_install_missing and pre.suggested_installs:
             run_commands(pre.suggested_installs, runner=runner)
+            refresh_windows_path_env()
             pre = preinstall_check()
         if not pre.ok:
             return InstallResult(ok=False, issues=pre.issues, entries=[], executed_commands=executed)

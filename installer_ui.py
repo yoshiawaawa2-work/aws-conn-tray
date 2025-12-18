@@ -1025,6 +1025,7 @@ class InstallerWizard:
             for cmd, rc in results:
                 log_line(f"{' '.join(cmd)} -> rc={rc}")
             pb.stop()
+            installer_core.refresh_windows_path_env()
             check = installer_core.preinstall_check()
             if check.ok:
                 log_line("前提条件チェック: OK")
