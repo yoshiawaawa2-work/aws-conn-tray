@@ -1,0 +1,25 @@
+name: windows-smoke
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  smoke-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Smoke run installer wrapper (--help)
+        run: cmd /c run_installer_windows.bat --help
+
+      - name: Smoke run uninstaller wrapper (--help)
+        run: cmd /c run_uninstaller_windows.bat --help
