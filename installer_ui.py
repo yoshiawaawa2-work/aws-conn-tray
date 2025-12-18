@@ -11,6 +11,7 @@ import threading
 import sys
 import os
 import subprocess
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
@@ -55,6 +56,7 @@ def _parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--preview", action="store_true", help="処理を実行せずプレビューのみ")
     p.add_argument("--headless", action="store_true", help="GUI を出さずに実行")
+    p.add_argument("--hold-progress", type=int, default=0, help="プレビュー用: 進捗画面を指定秒だけ表示してから終了")
     p.add_argument("--install-dir", default=None)
     p.add_argument("--config", default=None, help="既存 config.json のパス")
     p.add_argument("--no-autostart", action="store_true")
@@ -558,7 +560,7 @@ class InstallerWizard:
         self.current_step = idx
         self.current_frame = self.frames[idx]
         self.current_frame.pack(fill="both", expand=True)
-        # 完了画面ではナビゲーションを隠す
+        # 完了画面ではナビゲーションを隠す（進捗中は無効化のみで表示を維持）
         if self.nav_frame:
             if self.current_step == len(self.frames) - 1:
                 self.nav_frame.pack_forget()
@@ -602,6 +604,9 @@ class InstallerWizard:
         self._show_step(target)
 
     def prev_step(self):
+        # 進捗/完了では戻らない
+        if self.current_step >= len(self.frames) - 2:
+            return
         self._show_step(max(self.current_step - 1, 0))
 
     def _paste_clipboard(self) -> str:
@@ -624,12 +629,21 @@ class InstallerWizard:
     def _update_nav_labels(self):
         if self.back_button:
             label = "インストール中止" if self.current_step == 0 else "戻る"
-            state = "normal" if self.current_step < len(self.frames) - 1 else "disabled"
+            # 進捗/完了では戻れない
+            if self.current_step >= len(self.frames) - 2:
+                state = "disabled"
+            else:
+                state = "normal"
             self.back_button.config(text=label, state=state)
         if self.next_button:
-            if self.current_step == 3:
+            last = len(self.frames) - 1
+            progress_idx = len(self.frames) - 2
+            confirm_idx = len(self.frames) - 3
+            if self.current_step == confirm_idx:
                 self.next_button.config(text="インストール", state="normal")
-            elif self.current_step >= len(self.frames) - 1:
+            elif self.current_step == progress_idx:
+                self.next_button.config(text="処理中...", state="disabled")
+            elif self.current_step == last:
                 self.next_button.config(text="次へ", state="disabled")
             else:
                 state = "normal"
@@ -698,6 +712,9 @@ class InstallerWizard:
             self._log_progress("インストール完了" if res.ok else "インストール失敗")
             self.done_label.config(text="インストールが完了しました！" if res.ok else "エラーが発生しました")
             self.progressbar.stop()
+            hold = getattr(self, "hold_progress_seconds", 0)
+            if self.preview and hold > 0:
+                time.sleep(hold)
             self._show_step(len(self.frames) - 1)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -1035,6 +1052,8 @@ def run_gui(args):
         return 1
     root = tk.Tk()
     wizard = InstallerWizard(root, preview=args.preview, simulate_precheck_fail=getattr(args, "simulate_precheck_fail", False))
+    # プレビュー時に進捗ダイアログを保持するテスト用オプション
+    wizard.hold_progress_seconds = getattr(args, "hold_progress", 0)
     nav = tk.Frame(root)
     nav.pack(fill="x", side="bottom")
     def on_back_or_cancel():
