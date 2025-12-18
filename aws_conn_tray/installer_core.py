@@ -460,6 +460,13 @@ def setup_venv_and_install_deps(install_dir: Path, runner: Callable[..., subproc
     issues: List[str] = []
     executed: List[List[str]] = []
     venv_dir = install_dir / ".venv"
+    # 既存の venv がある場合は壊れた状態を避けるため一旦削除して作り直す
+    if venv_dir.exists():
+        try:
+            shutil.rmtree(venv_dir)
+        except Exception as e:
+            issues.append(f"既存の仮想環境を削除できませんでした: {e}")
+            return False, issues, executed
     python_cmd = sys.executable or "python3"
     cmd_venv = [python_cmd, "-m", "venv", str(venv_dir)]
     executed.append(cmd_venv)
