@@ -388,6 +388,20 @@ def create_build_tree(src_root: Path, build_dir: Path, dist_name: str = "aws-con
     """
     配布用の展開ディレクトリを build_dir に作成する。build_dir/dist_name を返す。
     """
+    def _copy_with_windows_eol(src: Path, dst: Path) -> None:
+        """
+        Windows バッチ (.bat/.cmd) を CRLF で書き出す。
+        Linux で生成した配布物でも cmd.exe が正しく解釈できるようにする。
+        """
+        try:
+            text = src.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            text = src.read_text(encoding="utf-8-sig")
+        # いったん LF に正規化し、CRLF で書き戻す
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        with dst.open("w", encoding="utf-8", newline="\r\n") as f:
+            f.write(text)
+
     build_dir.mkdir(parents=True, exist_ok=True)
     dist_dir = build_dir / dist_name
     if dist_dir.exists():
@@ -402,7 +416,10 @@ def create_build_tree(src_root: Path, build_dir: Path, dist_name: str = "aws-con
             dst.mkdir(parents=True, exist_ok=True)
         else:
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, dst)
+            if path.suffix.lower() in {".bat", ".cmd"}:
+                _copy_with_windows_eol(path, dst)
+            else:
+                shutil.copy2(path, dst)
     return dist_dir
 
 
