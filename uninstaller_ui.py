@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import threading
 import sys
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
@@ -50,6 +51,7 @@ def _parse_args(argv=None):
     p = argparse.ArgumentParser(description="aws-conn-tray アンインストーラ (GUI/CLI)")
     p.add_argument("--preview", action="store_true", help="削除せず対象のみ確認")
     p.add_argument("--headless", action="store_true", help="GUI を起動せず実行")
+    p.add_argument("--hold-progress", type=int, default=0, help="プレビュー用: 進捗画面を指定秒だけ表示してから終了")
     p.add_argument("--install-dir", help="インストール先パス（省略時はデフォルト）")
     p.add_argument("--shortcuts-dir", help="ショートカット/自動起動用ディレクトリ（省略時はデフォルト）")
     return p.parse_args(argv)
@@ -85,11 +87,12 @@ class UninstallWizard:
     - メタデータが存在する場合は install/shortcuts パスをロックして編集不可にする
     - preview=True の場合は削除せず、対象とコマンドのみ表示
     """
-    def __init__(self, root: tk.Tk, preview: bool = False, install_arg: Optional[str] = None, shortcuts_arg: Optional[str] = None):
+    def __init__(self, root: tk.Tk, preview: bool = False, install_arg: Optional[str] = None, shortcuts_arg: Optional[str] = None, hold_progress_seconds: int = 0):
         self.root = root
         self.root.title("aws-conn-tray アンインストーラ")
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.preview = preview
+        self.hold_progress_seconds = hold_progress_seconds
 
         self.content = tk.Frame(self.root)
         self.content.pack(fill="both", expand=True)
@@ -203,8 +206,8 @@ class UninstallWizard:
         self.current_frame = self.frames[idx]
         self.current_frame.pack(fill="both", expand=True)
         if self.nav_frame:
-            # 進捗/完了画面ではナビゲーションを隠す
-            if self.current_step in (len(self.frames) - 1, len(self.frames) - 2):
+            # 完了画面ではナビゲーションを隠す（進捗中は無効化のみで表示を維持）
+            if self.current_step == len(self.frames) - 1:
                 self.nav_frame.pack_forget()
             else:
                 if not self.nav_frame.winfo_manager():
@@ -214,7 +217,7 @@ class UninstallWizard:
     def _update_nav_labels(self):
         if self.back_button:
             label = "アンインストール中止" if self.current_step == 0 else "戻る"
-            state = "disabled" if self.current_step == len(self.frames) - 1 else "normal"
+            state = "disabled" if self.current_step >= len(self.frames) - 2 else "normal"
             self.back_button.config(text=label, state=state)
         if self.next_button:
             last = len(self.frames) - 1
@@ -241,6 +244,9 @@ class UninstallWizard:
         self._show_step(target)
 
     def prev_step(self):
+        # 進捗/完了では戻らない
+        if self.current_step >= len(self.frames) - 2:
+            return
         self._show_step(max(self.current_step - 1, 0))
 
     # --- ヘルパー ---
@@ -283,6 +289,8 @@ class UninstallWizard:
             if self.done_label:
                 self.done_label.config(text="アンインストールが完了しました！" if res.ok else "エラーが発生しました")
             self.progressbar.stop()
+            if self.preview and self.hold_progress_seconds > 0:
+                time.sleep(self.hold_progress_seconds)
             self._show_step(len(self.frames) - 1)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -294,7 +302,13 @@ class UninstallWizard:
 
 def run_gui(args):
     root = tk.Tk()
-    wizard = UninstallWizard(root, preview=args.preview, install_arg=args.install_dir, shortcuts_arg=args.shortcuts_dir)
+    wizard = UninstallWizard(
+        root,
+        preview=args.preview,
+        install_arg=args.install_dir,
+        shortcuts_arg=args.shortcuts_dir,
+        hold_progress_seconds=getattr(args, "hold_progress", 0),
+    )
     nav = tk.Frame(root)
     nav.pack(fill="x", side="bottom")
 
