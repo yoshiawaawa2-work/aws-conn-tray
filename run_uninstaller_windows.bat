@@ -6,6 +6,20 @@ set "PY_CMD="
 set "PY_CANDIDATE1=%SCRIPT_DIR%python\python.exe"
 set "PY_CANDIDATE2=%SCRIPT_DIR%python3\python.exe"
 set "PY_CANDIDATE3=%SCRIPT_DIR%.venv\Scripts\python.exe"
+rem CI (GitHub Actions 等) の場合は PATH 上の python を優先して即決する
+if "%GITHUB_ACTIONS%"=="true" (
+  set "PY_CMD=python"
+)
+
+rem PATH 上の python / python3 が見つかればそれを優先
+if not defined PY_CMD (
+  where /Q python
+  if "%errorlevel%"=="0" set "PY_CMD=python"
+)
+if not defined PY_CMD (
+  where /Q python3
+  if "%errorlevel%"=="0" set "PY_CMD=python3"
+)
 
 if exist "%PY_CANDIDATE1%" (
   set "PY_CMD=%PY_CANDIDATE1%"
