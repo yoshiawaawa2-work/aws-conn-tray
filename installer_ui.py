@@ -603,6 +603,9 @@ class InstallerWizard:
         self._show_step(target)
 
     def prev_step(self):
+        # 進捗/完了では戻らない
+        if self.current_step >= len(self.frames) - 2:
+            return
         self._show_step(max(self.current_step - 1, 0))
 
     def _paste_clipboard(self) -> str:
@@ -625,12 +628,21 @@ class InstallerWizard:
     def _update_nav_labels(self):
         if self.back_button:
             label = "インストール中止" if self.current_step == 0 else "戻る"
-            state = "normal" if self.current_step < len(self.frames) - 1 else "disabled"
+            # 進捗/完了では戻れない
+            if self.current_step >= len(self.frames) - 2:
+                state = "disabled"
+            else:
+                state = "normal"
             self.back_button.config(text=label, state=state)
         if self.next_button:
-            if self.current_step == 3:
+            last = len(self.frames) - 1
+            progress_idx = len(self.frames) - 2
+            confirm_idx = len(self.frames) - 3
+            if self.current_step == confirm_idx:
                 self.next_button.config(text="インストール", state="normal")
-            elif self.current_step >= len(self.frames) - 1:
+            elif self.current_step == progress_idx:
+                self.next_button.config(text="処理中...", state="disabled")
+            elif self.current_step == last:
                 self.next_button.config(text="次へ", state="disabled")
             else:
                 state = "normal"
