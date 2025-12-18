@@ -1,5 +1,6 @@
 @echo off
 setlocal
+chcp 65001 >nul
 set "SCRIPT_DIR=%~dp0"
 set "PY_CMD="
 rem Force UTF-8 for help/print outputs (avoids cp1252 encode errors)
@@ -47,6 +48,13 @@ if not defined PY_CMD (
 )
 
 pushd "%SCRIPT_DIR%" || (echo SCRIPT_DIR not found.& exit /b 1)
+echo Using python: %PY_CMD%
 "%PY_CMD%" "%SCRIPT_DIR%uninstaller_ui.py" %*
+if errorlevel 1 (
+  echo Uninstaller failed with errorlevel %errorlevel%.
+  echo If no GUI appeared, please run manually:
+  echo   %PY_CMD% "%SCRIPT_DIR%uninstaller_ui.py"
+  pause
+)
 popd
 endlocal
