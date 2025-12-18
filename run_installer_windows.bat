@@ -27,7 +27,20 @@ if not defined PY_CMD (
 
 if not defined PY_CMD (
   echo Python 3.10+ was not found. Please install Python and re-run.
-  exit /b 1
+  rem CI では GUI を出さずにそのまま失敗
+  if "%GITHUB_ACTIONS%"=="true" exit /b 1
+  rem GUI ダイアログで winget インストールを確認
+  powershell -NoProfile -Command "Add-Type -AssemblyName PresentationFramework; $r=[System.Windows.MessageBox]::Show('Python was not found. Install via winget now?','Python install','YesNo','Question'); if($r -eq 'Yes'){exit 0}else{exit 1}"
+  if errorlevel 1 (
+    echo Please install Python 3.10+ manually and rerun.
+    exit /b 1
+  )
+  winget install -e --id Python.Python
+  if errorlevel 1 (
+    echo winget install failed. Please install Python manually.
+    exit /b 1
+  )
+  set "PY_CMD=python"
 )
 
 pushd "%SCRIPT_DIR%" || (echo SCRIPT_DIR not found.& exit /b 1)
