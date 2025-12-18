@@ -2,6 +2,9 @@
 setlocal
 set "SCRIPT_DIR=%~dp0"
 set "PY_CMD="
+rem Force UTF-8 for help/print outputs (avoids cp1252 encode errors)
+set "PYTHONIOENCODING=utf-8"
+set "PYTHONUTF8=1"
 
 set "PY_CANDIDATE1=%SCRIPT_DIR%python\python.exe"
 set "PY_CANDIDATE2=%SCRIPT_DIR%python3\python.exe"
