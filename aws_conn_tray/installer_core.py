@@ -423,13 +423,10 @@ def create_build_tree(src_root: Path, build_dir: Path, dist_name: str = "aws-con
         Windows バッチ (.bat/.cmd) を CRLF で書き出す。
         Linux で生成した配布物でも cmd.exe が正しく解釈できるようにする。
         """
-        try:
-            text = src.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            text = src.read_text(encoding="utf-8-sig")
+        text = src.read_text(encoding="utf-8-sig")
         # いったん LF に正規化し、CRLF で書き戻す
         text = text.replace("\r\n", "\n").replace("\r", "\n")
-        with dst.open("w", encoding="utf-8", newline="\r\n") as f:
+        with dst.open("w", encoding="utf-8-sig", newline="\r\n") as f:
             f.write(text)
 
     build_dir.mkdir(parents=True, exist_ok=True)
