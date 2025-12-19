@@ -1001,6 +1001,14 @@ class InstallerWizard:
         log.pack(padx=10, pady=5)
         close_btn = tk.Button(win, text="閉じる", state="disabled", command=lambda: win.destroy())
         close_btn.pack(pady=5)
+        running = {"value": True}
+
+        def _on_close():
+            if running["value"]:
+                return
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", _on_close)
 
         def log_line(msg: str):
             log.configure(state="normal")
@@ -1019,6 +1027,7 @@ class InstallerWizard:
                     for cmd in suggested:
                         log_line(" ".join(cmd))
                     pb.stop()
+                    running["value"] = False
                     close_btn.config(state="normal")
                     return
             results = installer_core.run_commands(cmds_to_run)
@@ -1038,6 +1047,7 @@ class InstallerWizard:
             self.state["precheck_issues"] = check.issues
             self.state["precheck_suggested"] = check.suggested_installs
             self.root.after(0, self._run_precheck)
+            running["value"] = False
             close_btn.config(state="normal")
 
         threading.Thread(target=worker, daemon=True).start()
