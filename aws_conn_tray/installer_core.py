@@ -29,6 +29,36 @@ def _which(cmd: str) -> Optional[str]:
     return shutil.which(cmd)
 
 
+def refresh_windows_path_env() -> None:
+    """
+    Windows の最新 PATH をレジストリから読み込み、現在プロセスの PATH に反映する。
+    winget などで PATH が更新された直後でも、同一プロセス内の preinstall_check が拾えるようにする。
+    """
+    if not platforms.is_windows():
+        return
+    try:
+        import winreg
+    except Exception:
+        return
+
+    def _read_reg_path(root, subkey: str) -> str:
+        try:
+            with winreg.OpenKey(root, subkey) as key:
+                value, _ = winreg.QueryValueEx(key, "Path")
+                return value or ""
+        except Exception:
+            return ""
+
+    machine = _read_reg_path(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")
+    user = _read_reg_path(winreg.HKEY_CURRENT_USER, r"Environment")
+    combined = ";".join([p for p in [machine, user] if p])
+    if not combined:
+        return
+    # %SystemRoot% などを展開
+    parts = [os.path.expandvars(p) for p in combined.split(";") if p]
+    os.environ["PATH"] = ";".join(parts)
+
+
 def preinstall_check(sso_profile: Optional[str] = None) -> PreinstallResult:
     """
     Python/awscli/session-manager-plugin/venv を確認し、足りない場合は推奨インストールコマンドを提示する。
@@ -393,13 +423,10 @@ def create_build_tree(src_root: Path, build_dir: Path, dist_name: str = "aws-con
         Windows バッチ (.bat/.cmd) を CRLF で書き出す。
         Linux で生成した配布物でも cmd.exe が正しく解釈できるようにする。
         """
-        try:
-            text = src.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            text = src.read_text(encoding="utf-8-sig")
+        text = src.read_text(encoding="utf-8-sig")
         # いったん LF に正規化し、CRLF で書き戻す
         text = text.replace("\r\n", "\n").replace("\r", "\n")
-        with dst.open("w", encoding="utf-8", newline="\r\n") as f:
+        with dst.open("w", encoding="utf-8-sig", newline="\r\n") as f:
             f.write(text)
 
     build_dir.mkdir(parents=True, exist_ok=True)
@@ -703,6 +730,7 @@ def perform_install(opts: InstallOptions, runner: Callable[..., subprocess.Compl
     if not pre.ok:
         if opts.auto_install_missing and pre.suggested_installs:
             run_commands(pre.suggested_installs, runner=runner)
+            refresh_windows_path_env()
             pre = preinstall_check()
         if not pre.ok:
             return InstallResult(ok=False, issues=pre.issues, entries=[], executed_commands=executed)
