@@ -29,6 +29,16 @@ def _which(cmd: str) -> Optional[str]:
     return shutil.which(cmd)
 
 
+def _windows_user_start_menu_dir() -> Path:
+    """
+    Windows のユーザー単位スタートメニュー配下のフォルダを返す。
+    管理者権限が不要な場所を優先する。
+    """
+    appdata = os.environ.get("APPDATA")
+    base = Path(appdata) if appdata else (Path.home() / "AppData" / "Roaming")
+    return base / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "aws-conn-tray"
+
+
 def refresh_windows_path_env() -> None:
     """
     Windows の最新 PATH をレジストリから読み込み、現在プロセスの PATH に反映する。
@@ -270,8 +280,8 @@ def clear_install_metadata() -> None:
 def default_paths() -> Dict[str, Path]:
     home = Path.home()
     if platforms.is_windows():
-        root = Path(os.environ.get("SystemDrive", "C:")) / "aws-conn-tray"
-        start_menu = Path(os.environ.get("ProgramData", home / "AppData" / "Roaming")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "aws-conn-tray"
+        root = home / "aws-conn-tray"
+        start_menu = _windows_user_start_menu_dir()
         return {"install": root, "autostart_dir": start_menu}
     if platforms.is_macos():
         root = home / "aws-conn-tray"
@@ -351,7 +361,12 @@ def generate_windows_shortcuts(install_dir: Path, shortcuts_dir: Path, python_ex
     """
     実際の .lnk ではなく .cmd のラッパーを配置する（テスト環境で安全に扱えるように）。
     """
-    shortcuts_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        shortcuts_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        # 管理者権限が必要な場所だった場合は、ユーザー単位のスタートメニューへ退避
+        shortcuts_dir = _windows_user_start_menu_dir()
+        shortcuts_dir.mkdir(parents=True, exist_ok=True)
     py = python_executable or str(Path(sys.executable or "python").resolve())
     scripts = {
         "AWS Conn Tray (起動).cmd": f'@echo off\n"{py}" "{install_dir / "tray_app.py"}"\n',
