@@ -1270,11 +1270,13 @@ class MiniPrompt(wx.Frame):
         sizer.Add(btn, 0, wx.ALL | wx.ALIGN_RIGHT, 12)
         panel.SetSizer(sizer)
 
-        # 半透明（可能な環境のみ）
-        try:
-            self.SetTransparent(190)
-        except Exception:
-            pass
+        # Windows のレイヤードウィンドウでは子コントロールが描画されないことがあるため、
+        # 透過は Windows 以外でのみ有効化する
+        if not platforms.is_windows():
+            try:
+                self.SetTransparent(190)
+            except Exception:
+                pass
 
         # クリックでコールバック
         btn.Bind(wx.EVT_BUTTON, self._on_click)
