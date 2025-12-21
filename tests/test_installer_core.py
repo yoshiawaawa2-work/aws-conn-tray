@@ -186,6 +186,40 @@ def test_disable_autostart_linux_removes_service(monkeypatch, tmp_path):
     assert seen[1][:3] == ["systemctl", "--user", "daemon-reload"]
 
 
+def test_create_build_tree_excludes_dev_files(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    # allowed files
+    (src / "tray_app.py").write_text("x", encoding="utf-8")
+    (src / "installer_ui.py").write_text("x", encoding="utf-8")
+    (src / "run_installer_windows.bat").write_text("x", encoding="utf-8")
+    (src / "README.md").write_text("x", encoding="utf-8")
+    # allowed dirs
+    (src / "aws_conn_tray").mkdir()
+    (src / "aws_conn_tray" / "wx_tray.py").write_text("x", encoding="utf-8")
+    (src / "config").mkdir()
+    (src / "config" / "config.example.json").write_text("x", encoding="utf-8")
+    (src / "doc").mkdir()
+    (src / "doc" / "distribution_guide").mkdir(parents=True)
+    (src / "doc" / "distribution_guide" / "index.html").write_text("x", encoding="utf-8")
+    # dev dirs/files
+    (src / ".venv").mkdir()
+    (src / ".venv" / "skip.txt").write_text("x", encoding="utf-8")
+    (src / "tests").mkdir()
+    (src / "tests" / "skip.txt").write_text("x", encoding="utf-8")
+    (src / "doc" / "dev_notes.md").write_text("x", encoding="utf-8")
+
+    build_dir = tmp_path / "build"
+    dist = installer_core.create_build_tree(src, build_dir, dist_name="aws-conn-tray-dist")
+
+    assert (dist / "tray_app.py").exists()
+    assert (dist / "aws_conn_tray" / "wx_tray.py").exists()
+    assert (dist / "doc" / "distribution_guide" / "index.html").exists()
+    assert not (dist / ".venv").exists()
+    assert not (dist / "tests").exists()
+    assert not (dist / "doc" / "dev_notes.md").exists()
+
+
 def test_perform_install_preview(monkeypatch, tmp_path):
     monkeypatch.setattr(installer_core, "preinstall_check", lambda sso_profile=None: installer_core.PreinstallResult(ok=True, issues=[], suggested_installs=[]))
     called = {}

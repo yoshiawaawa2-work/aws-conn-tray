@@ -568,6 +568,36 @@ def create_build_tree(src_root: Path, build_dir: Path, dist_name: str = "aws-con
         with dst.open("w", encoding="utf-8-sig", newline="\r\n") as f:
             f.write(text)
 
+    allowed_dirs = {"aws_conn_tray", "config", "icons", "systemd", "doc"}
+    allowed_files = {
+        "tray_app.py",
+        "app_utils.py",
+        "installer.py",
+        "installer_ui.py",
+        "uninstaller.py",
+        "uninstaller_ui.py",
+        "autostart_gui.py",
+        "requirements.txt",
+        "README.md",
+    }
+
+    def _include_path(rel: Path) -> bool:
+        if not rel.parts:
+            return False
+        if "__pycache__" in rel.parts:
+            return False
+        if rel.suffix.lower() in {".pyc", ".pyo"}:
+            return False
+        top = rel.parts[0]
+        if top in allowed_dirs:
+            if top == "doc":
+                return len(rel.parts) > 1 and rel.parts[1] == "distribution_guide"
+            return True
+        if top in allowed_files:
+            return True
+        name = rel.name
+        return name.startswith("run_installer_") or name.startswith("run_uninstaller_")
+
     build_dir.mkdir(parents=True, exist_ok=True)
     dist_dir = build_dir / dist_name
     if dist_dir.exists():
@@ -577,6 +607,8 @@ def create_build_tree(src_root: Path, build_dir: Path, dist_name: str = "aws-con
         if build_dir in path.parents:
             continue
         rel = path.relative_to(src_root)
+        if not _include_path(rel):
+            continue
         dst = dist_dir / rel
         if path.is_dir():
             dst.mkdir(parents=True, exist_ok=True)
