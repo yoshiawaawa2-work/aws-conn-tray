@@ -592,6 +592,8 @@ def create_build_tree(src_root: Path, build_dir: Path, dist_name: str = "aws-con
         if top in allowed_dirs:
             if top == "doc":
                 return len(rel.parts) > 1 and rel.parts[1] == "distribution_guide"
+            if top == "config":
+                return rel.name == "config.example.json"
             return True
         if top in allowed_files:
             return True

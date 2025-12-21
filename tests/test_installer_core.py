@@ -215,6 +215,7 @@ def test_create_build_tree_excludes_dev_files(tmp_path):
     assert (dist / "tray_app.py").exists()
     assert (dist / "aws_conn_tray" / "wx_tray.py").exists()
     assert (dist / "doc" / "distribution_guide" / "index.html").exists()
+    assert not (dist / "config" / "config.json").exists()
     assert not (dist / ".venv").exists()
     assert not (dist / "tests").exists()
     assert not (dist / "doc" / "dev_notes.md").exists()
