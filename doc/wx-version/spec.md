@@ -17,7 +17,7 @@
 | 設定ダイアログ | `config/config.json` を複数タブ（forwards 配列）で編集。必須文字列/整数をバリデーション。保存時に自動再起動。設定専用起動（`tray_app.py --settings`）では本体が起動している場合のみ再起動。|
 | デフォルト値 | `config/config.example.json` を参照し、数値項目には「デフォルト」ボタンを配置。|
 | ログ | `~/.cache/aws_conn_tray/tray.log` に認可 URL 取得、WebView 起動、トンネル状態、エラーを記録。Qt WebView の stdout/stderr も記録。|
-| 自動起動/ショートカット | インストーラが OS ごとに自動生成（.desktop/.command/.cmd と systemd/LaunchAgent/Task Scheduler）。自動起動トグル GUI（`autostart_gui.py`）で状態確認と登録/解除が可能。解除時は起動中のアプリに終了要求を送る。|
+| 自動起動/ショートカット | インストーラが OS ごとに自動生成（.desktop/.command/.lnk と systemd/LaunchAgent/Task Scheduler）。自動起動トグル GUI（`autostart_gui.py`）で状態確認と登録/解除が可能。解除時は起動中のアプリに終了要求を送る。|
 | 配置/サービス名 | デフォルト配置 `~/aws-conn-tray`。自動生成されるユニット/タスクは `aws-conn-tray` 名で `.venv` の Python と `tray_app.py` を呼ぶ。|
 | クロスプラットフォーム | Windows では pty を使わず pipe で認可 URL を取得。WebView は QtWebEngine サブプロセス。tkinter でインストーラ/アンインストーラ/UI トグルも共通化。|
 | テスト | `make test` でモック中心の単体テスト。GUI 実機テストは DISPLAY/Xvfb 環境で `make test-gui`（WX_GUI_TEST=1 が必要）。|

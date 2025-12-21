@@ -39,7 +39,7 @@ def test_generate_windows_autostart(tmp_path, monkeypatch):
 
     entries = installer_core.generate_autostart_entries(install_dir, tmp_path / "shortcuts")
 
-    assert any(p.suffix == ".cmd" for p in entries)
+    assert any(p.suffix == ".lnk" for p in entries)
 
 
 def test_generate_macos_autostart(tmp_path, monkeypatch):

@@ -68,7 +68,7 @@ Linux で tkinter が無い場合は `sudo apt-get install -y python3-tk` を追
 ## 自動起動とショートカット
 - インストーラが以下を生成します（いずれもインストール先の `.venv` Python と `tray_app.py` を呼び出します）。  
   - Linux: `~/.config/systemd/user/aws-conn-tray.service` と `~/.local/share/applications/aws-conn-tray/*.desktop`（起動/設定/自動起動解除）。  
-  - Windows: スタートメニュー配下に 3 つの .cmd（起動/設定/自動起動解除）。タスクスケジューラ登録用のコマンドを自動実行。  
+- Windows: スタートメニュー配下に 3 つの .lnk（起動/設定/自動起動解除）。タスクスケジューラ登録用のコマンドを自動実行。  
   - macOS: `~/Library/LaunchAgents/aws.conn.tray.plist` と `/Applications/aws-conn-tray` 配下の .command（起動/設定/自動起動解除）。  
 - 自動起動のオン/オフは `autostart_gui.py` を起動すると GUI でトグルできます（状態表示つき）。CLI なら `python autostart_gui.py --enable|--disable`。
 

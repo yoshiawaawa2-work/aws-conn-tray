@@ -40,6 +40,47 @@ def _windows_user_start_menu_dir() -> Path:
     return base / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "aws-conn-tray"
 
 
+def _ps_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _create_windows_shortcut(
+    path: Path,
+    target: str,
+    arguments: str,
+    working_dir: Optional[str] = None,
+    description: Optional[str] = None,
+) -> None:
+    """
+    Windows の .lnk ショートカットを作成する。
+    非 Windows 環境ではテスト用のプレースホルダを書き出す。
+    """
+    if os.name != "nt":
+        content = "\n".join(
+            [
+                "Shortcut placeholder",
+                f"Target={target}",
+                f"Arguments={arguments}",
+            ]
+        )
+        path.write_text(content, encoding="utf-8")
+        return
+    cmd = [
+        "$WshShell = New-Object -ComObject WScript.Shell",
+        f"$Shortcut = $WshShell.CreateShortcut({_ps_quote(str(path))})",
+        f"$Shortcut.TargetPath = {_ps_quote(target)}",
+        f"$Shortcut.Arguments = {_ps_quote(arguments)}",
+    ]
+    if working_dir:
+        cmd.append(f"$Shortcut.WorkingDirectory = {_ps_quote(working_dir)}")
+    if description:
+        cmd.append(f"$Shortcut.Description = {_ps_quote(description)}")
+    cmd.append("$Shortcut.Save()")
+    res = subprocess.run(["powershell", "-NoProfile", "-Command", "; ".join(cmd)], check=False)
+    if getattr(res, "returncode", 1) != 0:
+        raise RuntimeError("Windows ショートカットの作成に失敗しました。")
+
+
 def _run_windows_elevated(cmd: List[str]) -> int:
     """
     Windows で UAC 昇格を伴うコマンドを実行する。
@@ -435,7 +476,8 @@ def generate_linux_autostart(install_dir: Path, shortcuts_dir: Path, python_exec
 
 def generate_windows_shortcuts(install_dir: Path, shortcuts_dir: Path, python_executable: Optional[str] = None) -> List[Path]:
     """
-    実際の .lnk ではなく .cmd のラッパーを配置する（テスト環境で安全に扱えるように）。
+    Windows のスタートメニュー用 .lnk を生成する。
+    非 Windows 環境ではテスト用のプレースホルダを作成する。
     """
     try:
         shortcuts_dir.mkdir(parents=True, exist_ok=True)
@@ -444,15 +486,21 @@ def generate_windows_shortcuts(install_dir: Path, shortcuts_dir: Path, python_ex
         shortcuts_dir = _windows_user_start_menu_dir()
         shortcuts_dir.mkdir(parents=True, exist_ok=True)
     py = python_executable or str(Path(sys.executable or "python").resolve())
-    scripts = {
-        "AWS Conn Tray (起動).cmd": f'@echo off\n"{py}" "{install_dir / "tray_app.py"}"\n',
-        "AWS Conn Tray (設定).cmd": f'@echo off\n"{py}" "{install_dir / "tray_app.py"}" --settings\n',
-        "AWS Conn Tray (自動起動解除).cmd": f'@echo off\n"{py}" "{install_dir / "autostart_gui.py"}"\n',
-    }
+    entries = [
+        ("AWS Conn Tray (起動).lnk", f"\"{install_dir / 'tray_app.py'}\"", "AWS Conn Tray を起動"),
+        ("AWS Conn Tray (設定).lnk", f"\"{install_dir / 'tray_app.py'}\" --settings", "設定ウィンドウを開く"),
+        ("AWS Conn Tray (自動起動解除).lnk", f"\"{install_dir / 'autostart_gui.py'}\"", "自動起動の登録/解除"),
+    ]
     paths: List[Path] = []
-    for name, content in scripts.items():
+    for name, args, desc in entries:
         p = shortcuts_dir / name
-        p.write_text(content, encoding="utf-8")
+        _create_windows_shortcut(
+            p,
+            py,
+            args,
+            working_dir=str(install_dir),
+            description=desc,
+        )
         paths.append(p)
     return paths
 
