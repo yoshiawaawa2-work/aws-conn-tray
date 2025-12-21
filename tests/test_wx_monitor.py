@@ -1,6 +1,7 @@
 import importlib.util
 import os
 import time
+import threading
 
 import pytest
 
@@ -10,6 +11,13 @@ from aws_conn_tray import wx_tray
 def skip_if_no_wx():
     if importlib.util.find_spec("wx") is None:
         pytest.skip("wxPython not installed")
+
+
+@pytest.fixture(autouse=True)
+def _clear_sso_login_proc():
+    wx_tray._clear_sso_login_proc()
+    yield
+    wx_tray._clear_sso_login_proc()
 
 
 def test_validate_settings_input():
@@ -95,13 +103,15 @@ def test_start_sso_login_webview_fallback(monkeypatch):
     stub_app = type("App", (), {})()
     stub_app._tray_app = type("Tray", (), {"_show_browser_prompt": lambda self, url, msg: called_prompt.setdefault("msg", msg)})()
     monkeypatch.setattr(wx_tray.wx, "GetApp", lambda: stub_app)
-    monkeypatch.setattr(wx_tray, "open_qt_webview_authorize", lambda url, storage_dir=None, on_fail=None: False)
+    monkeypatch.setattr(wx_tray, "open_qt_webview_authorize", lambda url, storage_dir=None, on_fail=None, on_close=None: False)
     monkeypatch.setattr(wx_tray, "notify", lambda *a, **k: called_prompt.setdefault("notify", True))
+    monkeypatch.setattr(wx_tray, "_schedule_sso_login_cancel", lambda reason, grace_seconds=0: called_prompt.setdefault("cancel_reason", reason))
 
-    ok = wx_tray.start_sso_login_webview("https://example.com/auth")
+    ok = wx_tray.start_sso_login_webview("https://example.com/auth", timeout_seconds=10)
     assert ok is False
     assert "msg" in called_prompt
     assert "WebView を開けませんでした" in called_prompt["msg"]
+    assert called_prompt.get("cancel_reason") == "browser_fallback"
 
 
 def test_qt_webview_crash_triggers_browser_fallback(monkeypatch):
@@ -136,6 +146,56 @@ def test_qt_webview_crash_triggers_browser_fallback(monkeypatch):
     assert ok is True
     time.sleep(0.8)
     assert "msg" in called_prompt
+
+
+def test_qt_webview_close_triggers_cancel(monkeypatch):
+    called = {}
+    done = threading.Event()
+
+    class DummyProc:
+        def __init__(self):
+            self.returncode = 0
+        def communicate(self):
+            return ("", "")
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(wx_tray.subprocess, "Popen", lambda *a, **k: DummyProc())
+    monkeypatch.setattr(wx_tray, "_schedule_sso_login_cancel", lambda reason, grace_seconds=0: (called.setdefault("reason", reason), done.set()))
+    ok = wx_tray.open_qt_webview_authorize("https://example.com", on_close=lambda rc: wx_tray._schedule_sso_login_cancel("webview_closed", grace_seconds=0))
+    assert ok is True
+    assert done.wait(timeout=1.0)
+    assert called["reason"] == "webview_closed"
+
+
+def test_schedule_cancel_terminates_proc(monkeypatch):
+    called = threading.Event()
+
+    class DummyProc:
+        def __init__(self):
+            self._running = True
+            self.terminated = False
+            self.killed = False
+        def poll(self):
+            return None if self._running else 0
+        def terminate(self):
+            self.terminated = True
+            self._running = False
+            called.set()
+        def kill(self):
+            self.killed = True
+            self._running = False
+            called.set()
+
+    proc = DummyProc()
+    with wx_tray._sso_login_proc_lock:
+        wx_tray._sso_login_proc = proc
+        wx_tray._sso_login_proc_profile = "p"
+        wx_tray._sso_login_proc_region = "r"
+    monkeypatch.setattr(wx_tray, "is_sso_session_valid", lambda *_a, **_k: False)
+    wx_tray._schedule_sso_login_cancel("test", grace_seconds=0)
+    assert called.wait(timeout=1.0)
+    assert proc.terminated or proc.killed
 
 
 def test_wrap_text_for_prompt():
@@ -424,7 +484,7 @@ def test_refresh_webview_fallback(monkeypatch):
     monkeypatch.setattr(wx_tray.threading, "Thread", fake_thread)
     # URL 取得成功 → 自動で WebView を開く
     monkeypatch.setattr(wx_tray, "_fetch_authorize_url", lambda *a, **k: ("https://auth.example.com/authorize", None))
-    def fake_start(url):
+    def fake_start(url, timeout_seconds=None):
         called["opened"] += 1
         return True
     monkeypatch.setattr(wx_tray, "start_sso_login_webview", fake_start)
@@ -477,7 +537,7 @@ def test_refresh_webview_fetch_fail(monkeypatch):
 
     monkeypatch.setattr(wx_tray.threading, "Thread", fake_thread)
     monkeypatch.setattr(wx_tray, "_fetch_authorize_url", lambda *a, **k: (None, None))
-    monkeypatch.setattr(wx_tray, "start_sso_login_webview", lambda url: False)
+    monkeypatch.setattr(wx_tray, "start_sso_login_webview", lambda url, timeout_seconds=None: False)
     def fake_browser_prompt(url, msg):
         called.setdefault("prompt", (url, msg))
     app._show_browser_prompt = fake_browser_prompt
@@ -514,7 +574,7 @@ def test_launch_webview_fetch_failure_prompts_browser(monkeypatch):
     app._show_browser_prompt = lambda url, msg: called.setdefault("prompt", (url, msg))
 
     monkeypatch.setattr(wx_tray, "_fetch_authorize_url", lambda *a, **k: (None, None))
-    monkeypatch.setattr(wx_tray, "start_sso_login_webview", lambda url: False)
+    monkeypatch.setattr(wx_tray, "start_sso_login_webview", lambda url, timeout_seconds=None: False)
     monkeypatch.setattr(wx_tray, "log_message", lambda *a, **k: None)
     # CallAfter は即時呼び出しに差し替え
     monkeypatch.setattr(wx_tray.wx, "CallAfter", lambda fn, *a, **k: fn(*a, **k))
@@ -722,6 +782,7 @@ def test_fetch_authorize_url_cleans_up_pty(monkeypatch):
     close_calls = []
     monkeypatch.setattr(wx_tray.os, "close", lambda fd: close_calls.append(fd))
     monkeypatch.setattr(wx_tray, "log_message", lambda *a, **k: None)
+    monkeypatch.setattr(wx_tray, "_set_sso_login_proc", lambda *a, **k: None)
 
     class DummyProc:
         def __init__(self):
