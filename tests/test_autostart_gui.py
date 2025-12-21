@@ -22,8 +22,10 @@ def test_toggle_autostart_disable(monkeypatch):
         return [["disable"]]
 
     monkeypatch.setattr(autostart_gui.installer_core, "disable_autostart", fake_disable)
+    monkeypatch.setattr(autostart_gui, "_request_app_exit", lambda *_a, **_k: called.setdefault("exit", True))
     cmds = autostart_gui.toggle_autostart(False, install_dir=None)
     assert called["called"] is True
+    assert called["exit"] is True
     assert cmds == [["disable"]]
 
 
@@ -53,7 +55,17 @@ def test_is_autostart_enabled_windows(monkeypatch):
 
     def fake_runner(cmd, check=False, **kwargs):
         seen["cmd"] = cmd
+        return type("R", (), {"returncode": 0})()
+
+    assert autostart_gui.is_autostart_enabled(runner=fake_runner) is True
+    assert seen["cmd"][:2] == ["schtasks", "/Query"]
+
+
+def test_is_autostart_enabled_windows_disabled(monkeypatch):
+    monkeypatch.setattr(autostart_gui.platforms, "is_windows", lambda: True)
+    monkeypatch.setattr(autostart_gui.platforms, "is_macos", lambda: False)
+
+    def fake_runner(cmd, check=False, **kwargs):
         return type("R", (), {"returncode": 1})()
 
     assert autostart_gui.is_autostart_enabled(runner=fake_runner) is False
-    assert seen["cmd"][:2] == ["schtasks", "/Query"]

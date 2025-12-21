@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,6 +38,122 @@ def _windows_user_start_menu_dir() -> Path:
     appdata = os.environ.get("APPDATA")
     base = Path(appdata) if appdata else (Path.home() / "AppData" / "Roaming")
     return base / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "aws-conn-tray"
+
+
+def _ps_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _create_windows_shortcut(
+    path: Path,
+    target: str,
+    arguments: str,
+    working_dir: Optional[str] = None,
+    description: Optional[str] = None,
+) -> None:
+    """
+    Windows の .lnk ショートカットを作成する。
+    非 Windows 環境ではテスト用のプレースホルダを書き出す。
+    """
+    if os.name != "nt":
+        content = "\n".join(
+            [
+                "Shortcut placeholder",
+                f"Target={target}",
+                f"Arguments={arguments}",
+            ]
+        )
+        path.write_text(content, encoding="utf-8")
+        return
+    cmd = [
+        "$WshShell = New-Object -ComObject WScript.Shell",
+        f"$Shortcut = $WshShell.CreateShortcut({_ps_quote(str(path))})",
+        f"$Shortcut.TargetPath = {_ps_quote(target)}",
+        f"$Shortcut.Arguments = {_ps_quote(arguments)}",
+    ]
+    if working_dir:
+        cmd.append(f"$Shortcut.WorkingDirectory = {_ps_quote(working_dir)}")
+    if description:
+        cmd.append(f"$Shortcut.Description = {_ps_quote(description)}")
+    cmd.append("$Shortcut.Save()")
+    res = subprocess.run(["powershell", "-NoProfile", "-Command", "; ".join(cmd)], check=False)
+    if getattr(res, "returncode", 1) != 0:
+        raise RuntimeError("Windows ショートカットの作成に失敗しました。")
+
+
+def _run_windows_elevated(cmd: List[str]) -> int:
+    """
+    Windows で UAC 昇格を伴うコマンドを実行する。
+    Start-Process -Verb RunAs を使い、ユーザーに確認ダイアログを出す。
+    """
+    if not platforms.is_windows():
+        return 1
+    if not cmd:
+        return 1
+    try:
+        arg_line = subprocess.list2cmdline(cmd[1:])
+    except Exception:
+        arg_line = " ".join(cmd[1:])
+    ps = (
+        "Start-Process -FilePath "
+        + repr(cmd[0])
+        + " -ArgumentList "
+        + repr(arg_line)
+        + " -Verb RunAs -Wait -PassThru | ForEach-Object { exit $_.ExitCode }"
+    )
+    res = subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=False)
+    return getattr(res, "returncode", 1)
+
+
+def _windows_task_xml(install_dir: Path, py_exec: str) -> str:
+    """
+    Task Scheduler 用の XML を生成する。
+    ログオン時に起動し、失敗時は一定回数再起動する。
+    """
+    user = os.environ.get("USERNAME") or "User"
+    domain = os.environ.get("USERDOMAIN")
+    user_id = f"{domain}\\{user}" if domain else user
+    return "\n".join(
+        [
+            '<?xml version="1.0" encoding="UTF-16"?>',
+            '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
+            "  <RegistrationInfo>",
+            "    <Description>AWS Conn Tray autostart</Description>",
+            "  </RegistrationInfo>",
+            "  <Triggers>",
+            "    <LogonTrigger>",
+            "      <Enabled>true</Enabled>",
+            "    </LogonTrigger>",
+            "  </Triggers>",
+            "  <Principals>",
+            '    <Principal id="Author">',
+            f"      <UserId>{user_id}</UserId>",
+            "      <LogonType>InteractiveToken</LogonType>",
+            "      <RunLevel>HighestAvailable</RunLevel>",
+            "    </Principal>",
+            "  </Principals>",
+            "  <Settings>",
+            "    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
+            "    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>",
+            "    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>",
+            "    <StartWhenAvailable>true</StartWhenAvailable>",
+            "    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>",
+            "    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>",
+            "    <RestartOnFailure>",
+            "      <Interval>PT5S</Interval>",
+            "      <Count>999</Count>",
+            "    </RestartOnFailure>",
+            "  </Settings>",
+            '  <Actions Context="Author">',
+            "    <Exec>",
+            f"      <Command>{py_exec}</Command>",
+            f"      <Arguments>\"{install_dir / 'tray_app.py'}\"</Arguments>",
+            f"      <WorkingDirectory>{install_dir}</WorkingDirectory>",
+            "    </Exec>",
+            "  </Actions>",
+            "</Task>",
+        ]
+    )
 
 
 def refresh_windows_path_env() -> None:
@@ -359,7 +476,8 @@ def generate_linux_autostart(install_dir: Path, shortcuts_dir: Path, python_exec
 
 def generate_windows_shortcuts(install_dir: Path, shortcuts_dir: Path, python_executable: Optional[str] = None) -> List[Path]:
     """
-    実際の .lnk ではなく .cmd のラッパーを配置する（テスト環境で安全に扱えるように）。
+    Windows のスタートメニュー用 .lnk を生成する。
+    非 Windows 環境ではテスト用のプレースホルダを作成する。
     """
     try:
         shortcuts_dir.mkdir(parents=True, exist_ok=True)
@@ -368,15 +486,21 @@ def generate_windows_shortcuts(install_dir: Path, shortcuts_dir: Path, python_ex
         shortcuts_dir = _windows_user_start_menu_dir()
         shortcuts_dir.mkdir(parents=True, exist_ok=True)
     py = python_executable or str(Path(sys.executable or "python").resolve())
-    scripts = {
-        "AWS Conn Tray (起動).cmd": f'@echo off\n"{py}" "{install_dir / "tray_app.py"}"\n',
-        "AWS Conn Tray (設定).cmd": f'@echo off\n"{py}" "{install_dir / "tray_app.py"}" --settings\n',
-        "AWS Conn Tray (自動起動解除).cmd": f'@echo off\n"{py}" "{install_dir / "autostart_gui.py"}"\n',
-    }
+    entries = [
+        ("AWS Conn Tray (起動).lnk", f"\"{install_dir / 'tray_app.py'}\"", "AWS Conn Tray を起動"),
+        ("AWS Conn Tray (設定).lnk", f"\"{install_dir / 'tray_app.py'}\" --settings", "設定ウィンドウを開く"),
+        ("AWS Conn Tray (自動起動解除).lnk", f"\"{install_dir / 'autostart_gui.py'}\"", "自動起動の登録/解除"),
+    ]
     paths: List[Path] = []
-    for name, content in scripts.items():
+    for name, args, desc in entries:
         p = shortcuts_dir / name
-        p.write_text(content, encoding="utf-8")
+        _create_windows_shortcut(
+            p,
+            py,
+            args,
+            working_dir=str(install_dir),
+            description=desc,
+        )
         paths.append(p)
     return paths
 
@@ -444,6 +568,38 @@ def create_build_tree(src_root: Path, build_dir: Path, dist_name: str = "aws-con
         with dst.open("w", encoding="utf-8-sig", newline="\r\n") as f:
             f.write(text)
 
+    allowed_dirs = {"aws_conn_tray", "config", "icons", "systemd", "doc"}
+    allowed_files = {
+        "tray_app.py",
+        "app_utils.py",
+        "installer.py",
+        "installer_ui.py",
+        "uninstaller.py",
+        "uninstaller_ui.py",
+        "autostart_gui.py",
+        "requirements.txt",
+        "README.md",
+    }
+
+    def _include_path(rel: Path) -> bool:
+        if not rel.parts:
+            return False
+        if "__pycache__" in rel.parts:
+            return False
+        if rel.suffix.lower() in {".pyc", ".pyo"}:
+            return False
+        top = rel.parts[0]
+        if top in allowed_dirs:
+            if top == "doc":
+                return len(rel.parts) > 1 and rel.parts[1] == "distribution_guide"
+            if top == "config":
+                return rel.name == "config.example.json"
+            return True
+        if top in allowed_files:
+            return True
+        name = rel.name
+        return name.startswith("run_installer_") or name.startswith("run_uninstaller_")
+
     build_dir.mkdir(parents=True, exist_ok=True)
     dist_dir = build_dir / dist_name
     if dist_dir.exists():
@@ -453,6 +609,8 @@ def create_build_tree(src_root: Path, build_dir: Path, dist_name: str = "aws-con
         if build_dir in path.parents:
             continue
         rel = path.relative_to(src_root)
+        if not _include_path(rel):
+            continue
         dst = dist_dir / rel
         if path.is_dir():
             dst.mkdir(parents=True, exist_ok=True)
@@ -577,7 +735,7 @@ def uninstall_app(install_dir: Path, shortcuts_dir: Optional[Path] = None) -> No
 def enable_autostart(install_dir: Path, dry_run: bool = False, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> List[List[str]]:
     """
     OS ごとに自動起動を登録する。
-    - Windows: タスクスケジューラ /TN "AWS Conn Tray" で ONLOGON 実行
+    - Windows: Task Scheduler で ONLOGON 起動（失敗時は再起動）
     - macOS: ~/Library/LaunchAgents に plist を生成し launchctl で load
     - Linux: ~/.config/systemd/user に service を生成し daemon-reload + enable --now
     いずれもインストール先の .venv/python と tray_app.py を Exec に埋め込む。
@@ -588,17 +746,25 @@ def enable_autostart(install_dir: Path, dry_run: bool = False, runner: Callable[
     py_exec = str(venv_python)
     executed: List[List[str]] = []
     if platforms.is_windows():
-        task_cmd = [
-            "schtasks",
-            "/Create",
-            "/TN",
-            "AWS Conn Tray",
-            "/SC",
-            "ONLOGON",
-            "/TR",
-            f'"{py_exec}" "{install_dir / "tray_app.py"}"',
-        ]
-        cmds.append(task_cmd)
+        task_xml = _windows_task_xml(install_dir, py_exec)
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xml")
+        try:
+            tmp.write(task_xml.encode("utf-16"))
+            tmp.close()
+            task_cmd = ["schtasks", "/Create", "/TN", "AWS Conn Tray", "/XML", tmp.name, "/F"]
+            cmds.append(task_cmd)
+            if dry_run:
+                return cmds
+            rc = _run_windows_elevated(task_cmd)
+            executed.append(["elevated"] + task_cmd)
+            if rc != 0:
+                executed.append(["elevated", "failed"])
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
+        return executed
     elif platforms.is_macos():
         plist_dir = Path.home() / "Library" / "LaunchAgents"
         plist_dir.mkdir(parents=True, exist_ok=True)
@@ -617,6 +783,10 @@ def enable_autostart(install_dir: Path, dry_run: bool = False, runner: Callable[
                     f"    <string>{install_dir / 'tray_app.py'}</string>",
                     "  </array>",
                     "  <key>RunAtLoad</key><true/>",
+                    "  <key>KeepAlive</key>",
+                    "  <dict>",
+                    "    <key>SuccessfulExit</key><false/>",
+                    "  </dict>",
                     "</dict>",
                     "</plist>",
                 ]
@@ -662,28 +832,44 @@ def disable_autostart(dry_run: bool = False, runner: Callable[..., subprocess.Co
     """
     OS ごとに自動起動登録を解除する。
     - Windows: schtasks /Delete
-    - macOS: launchctl unload
-    - Linux: systemctl --user disable --now
+    - macOS: launchctl unload + LaunchAgent を削除
+    - Linux: systemctl --user disable --now + service を削除
     dry_run=True ならコマンド配列だけ返す。
     """
     cmds: List[List[str]] = []
+    cleanup_targets: List[Path] = []
     if platforms.is_windows():
         cmds.append(["schtasks", "/Delete", "/TN", "AWS Conn Tray", "/F"])
     elif platforms.is_macos():
         plist = Path.home() / "Library" / "LaunchAgents" / "aws.conn.tray.plist"
         cmds.append(["launchctl", "unload", str(plist)])
+        cleanup_targets.append(plist)
     else:
         cmds.append(["systemctl", "--user", "disable", "--now", "aws-conn-tray.service"])
+        cmds.append(["systemctl", "--user", "daemon-reload"])
+        cleanup_targets.append(Path.home() / ".config" / "systemd" / "user" / "aws-conn-tray.service")
 
     executed: List[List[str]] = []
     if dry_run:
         return cmds
     for cmd in cmds:
         try:
-            runner(cmd, check=False)
-            executed.append(cmd)
+            if platforms.is_windows() and cmd[0] == "schtasks":
+                rc = _run_windows_elevated(cmd)
+                executed.append(["elevated"] + cmd)
+                if rc != 0:
+                    executed.append(["elevated", "failed"])
+            else:
+                runner(cmd, check=False)
+                executed.append(cmd)
         except Exception:
             executed.append(cmd)
+    for path in cleanup_targets:
+        try:
+            if path.exists():
+                path.unlink()
+        except Exception:
+            continue
     return executed
 
 

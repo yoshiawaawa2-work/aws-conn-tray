@@ -12,6 +12,7 @@ import contextlib
 import select
 import time
 import webbrowser
+import queue
 
 try:
     import wx
@@ -27,6 +28,7 @@ except Exception:
 from .paths import ICON_DIR, CONFIG_PATH, CONFIG_EXAMPLE_PATH, APP_ROOT
 from .logger import log_message, notify
 from .config_loader import Config, ForwardTarget, load_config
+from . import installer_core
 from .sso import check_sso_token, is_sso_session_valid, start_sso_login_browser
 from .ssm import SsmPortForward, _cleanup_lingering_sessions
 from . import platforms
@@ -52,6 +54,11 @@ FAIL_AUTH_URL_MESSAGE = (
 )
 # Qt WebView サブプロセス管理用
 _qt_webview_procs: List[subprocess.Popen] = []
+SSO_LOGIN_CANCEL_GRACE_SECONDS = 5.0
+_sso_login_proc: Optional[subprocess.Popen] = None
+_sso_login_proc_profile: Optional[str] = None
+_sso_login_proc_region: Optional[str] = None
+_sso_login_proc_lock = threading.Lock()
 
 try:
     import pty
@@ -104,6 +111,7 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
         on_reconnect_all: Optional[Callable[[], None]] = None,
         on_reconnect_single: Optional[Callable[[str], None]] = None,
         on_quit: Optional[Callable[[], None]] = None,
+        on_quit_disable_autostart: Optional[Callable[[], None]] = None,
         forward_statuses: Optional[Dict[str, str]] = None,
     ):
         super().__init__()
@@ -113,7 +121,9 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
         self.cb_reconnect_all = on_reconnect_all
         self.cb_reconnect_single = on_reconnect_single
         self.cb_quit = on_quit
+        self.cb_quit_disable_autostart = on_quit_disable_autostart
         self.forward_statuses: Dict[str, str] = forward_statuses or {}
+        self._status_bitmap_cache: Dict[str, "wx.Bitmap"] = {}
         self.set_icon_color("red")
         # 左右クリックどちらでもメニューを開けるようにする
         self.Bind(wx.adv.EVT_TASKBAR_LEFT_DOWN, self._on_taskbar_click)
@@ -130,6 +140,7 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
             ("SSO ログイン", "on_sso_login"),
             ("全フォワード再接続", "on_reconnect_all"),
             (None, None),  # separator
+            ("自動起動解除して終了（最終手段）", "on_quit_disable_autostart"),
             ("終了", "on_quit"),
         ]
 
@@ -150,9 +161,14 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
             header = menu.Append(-1, "▼ フォワード状態（クリック不可）")
             header.Enable(False)
             for name, status in self.forward_statuses.items():
-                emoji = {"red": "🟥", "yellow": "🟨", "green": "🟩"}.get(status, "⬜")
-                item = menu.Append(-1, f"{emoji} {name}")
+                item = menu.Append(-1, name)
                 item.Enable(False)  # インジケータのみ
+                try:
+                    bmp = self._get_status_bitmap(status)
+                    if bmp and bmp.IsOk():
+                        item.SetBitmap(bmp)
+                except Exception:
+                    pass
             menu.AppendSeparator()
             # 個別再接続
             for name in self.forward_statuses.keys():
@@ -174,6 +190,40 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
             self.SetIcon(icon, "aws-conn-tray")
         except Exception as e:
             log_message(f"[wx] icon set failed: {e}")
+
+    def _get_status_bitmap(self, status: str) -> Optional["wx.Bitmap"]:
+        if wx is None:
+            return None
+        if status in self._status_bitmap_cache:
+            return self._status_bitmap_cache[status]
+        color_map = {
+            "green": wx.Colour(34, 160, 0),
+            "yellow": wx.Colour(226, 160, 0),
+            "red": wx.Colour(200, 60, 50),
+        }
+        color = color_map.get(status, wx.Colour(136, 136, 136))
+        size = 14
+        try:
+            bmp = wx.Bitmap(size, size, 32)
+        except Exception:
+            bmp = wx.Bitmap(size, size)
+        dc = wx.MemoryDC(bmp)
+        try:
+            dc.SetBackground(wx.Brush(wx.Colour(0, 0, 0, 0)))
+            dc.Clear()
+            gc = wx.GraphicsContext.Create(dc)
+            if gc:
+                gc.SetBrush(wx.Brush(color))
+                gc.SetPen(wx.Pen(wx.Colour(0, 0, 0, 0)))
+                gc.DrawEllipse(1, 1, size - 2, size - 2)
+            else:
+                dc.SetBrush(wx.Brush(color))
+                dc.SetPen(wx.Pen(color))
+                dc.DrawCircle(size // 2, size // 2, (size - 2) // 2)
+        finally:
+            dc.SelectObject(wx.NullBitmap)
+        self._status_bitmap_cache[status] = bmp
+        return bmp
 
     def on_settings(self, _evt=None):
         if self.cb_settings:
@@ -199,6 +249,14 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
     def on_quit(self, _evt=None):
         if self.cb_quit:
             self.cb_quit()
+        try:
+            wx.CallAfter(lambda: wx.GetApp().ExitMainLoop())
+        except Exception:
+            wx.CallAfter(lambda: wx.GetApp().ExitMainLoop())
+
+    def on_quit_disable_autostart(self, _evt=None):
+        if self.cb_quit_disable_autostart:
+            self.cb_quit_disable_autostart()
         try:
             wx.CallAfter(lambda: wx.GetApp().ExitMainLoop())
         except Exception:
@@ -268,6 +326,7 @@ class WxTrayApp:
         callbacks.setdefault("reconnect_all", self.on_reconnect_all)
         callbacks.setdefault("reconnect_single", self.on_reconnect_single)
         callbacks.setdefault("quit", self.on_quit)
+        callbacks.setdefault("quit_disable_autostart", self.on_quit_disable_autostart)
         self.tray_icon = WxTrayIcon(
             parent=self._frame,
             on_settings=callbacks.get("settings"),
@@ -275,6 +334,7 @@ class WxTrayApp:
             on_reconnect_all=callbacks.get("reconnect_all"),
             on_reconnect_single=callbacks.get("reconnect_single"),
             on_quit=callbacks.get("quit"),
+            on_quit_disable_autostart=callbacks.get("quit_disable_autostart"),
             forward_statuses={name: "red" for name in self.forward_states.keys()},
         )
         # 監視タイマー
@@ -498,7 +558,7 @@ class WxTrayApp:
                 if url and "authorize" in url.lower():
                     log_message(f"[wx-refresh] authorize url fetched: {url}")
                     # 自動で WebView を開き、失敗時は MiniPrompt/通知がフォールバック
-                    call_ui(lambda: start_sso_login_webview(url))
+                    call_ui(lambda: start_sso_login_webview(url, timeout_seconds=self.config.sso_login_timeout_seconds))
                 else:
                     # 自動更新時も同じ考え方でブラウザ誘導に切り替える
                     call_ui(lambda: self._show_browser_prompt(self.config.sso_start_url, FAIL_AUTH_URL_MESSAGE))
@@ -571,6 +631,13 @@ class WxTrayApp:
         state.status = "yellow"
 
     def on_quit(self):
+        self.shutdown()
+
+    def on_quit_disable_autostart(self):
+        try:
+            installer_core.disable_autostart(dry_run=False)
+        except Exception as e:
+            notify("自動起動解除", f"自動起動の解除に失敗しました: {e}")
         self.shutdown()
 
     def _show_settings_dialog(self, current: Dict[str, Any], defaults: Dict[str, Any]):
@@ -833,7 +900,7 @@ class WxTrayApp:
                     wx.CallAfter(self._show_browser_prompt, fallback_url, FAIL_AUTH_URL_MESSAGE)
                     return
 
-                ok = start_sso_login_webview(url_to_open)
+                ok = start_sso_login_webview(url_to_open, timeout_seconds=self.config.sso_login_timeout_seconds)
                 log_message(f"[webview-launch] start_sso_login_webview result={ok}")
                 if ok:
                     # 成功したらミニダイアログは閉じる
@@ -964,6 +1031,7 @@ def open_qt_webview_authorize(
     url: str,
     storage_dir: Optional[str] = None,
     on_fail: Optional[Callable[[], None]] = None,
+    on_close: Optional[Callable[[Optional[int]], None]] = None,
 ) -> bool:
     """
     PySide6 + QtWebEngine をサブプロセスで起動して認可URLを開く。
@@ -1026,6 +1094,11 @@ def open_qt_webview_authorize(
                 out, err = p.communicate()
                 rc = p.returncode
                 log_message(f"[qt-webview] exit rc={rc} stdout={out!r} stderr={err!r}")
+                if on_close:
+                    try:
+                        on_close(rc)
+                    except Exception as e:
+                        log_message(f"[qt-webview] on_close error: {e}")
                 if rc not in (0, None) and on_fail:
                     try:
                         on_fail()
@@ -1033,6 +1106,11 @@ def open_qt_webview_authorize(
                         log_message(f"[qt-webview] on_fail error: {e}")
             except Exception as e:
                 log_message(f"[qt-webview] wait error: {e}")
+                if on_close:
+                    try:
+                        on_close(None)
+                    except Exception as e2:
+                        log_message(f"[qt-webview] on_close error: {e2}")
 
         threading.Thread(target=_wait_and_log, args=(proc, url), daemon=True).start()
 
@@ -1063,7 +1141,7 @@ def open_qt_webview_authorize(
         return True
 
 
-def start_sso_login_webview(url: str) -> bool:
+def start_sso_login_webview(url: str, timeout_seconds: Optional[int] = None) -> bool:
     """
     認可URLを Qt WebEngine (PySide6) で開く。失敗時はミニダイアログ経由でブラウザフォールバック。
     """
@@ -1075,6 +1153,8 @@ def start_sso_login_webview(url: str) -> bool:
         # 右下ダイアログでブラウザ誘導。wx コンテキストが無い場合は notify にフォールバック。
         fallback_triggered["done"] = True
         log_message("[webview-fallback] showing browser prompt")
+        if timeout_seconds:
+            _schedule_sso_login_cancel("browser_fallback", grace_seconds=float(timeout_seconds))
         try:
             app = wx.GetApp()
             if app and hasattr(app, "_tray_app"):
@@ -1104,7 +1184,11 @@ def start_sso_login_webview(url: str) -> bool:
             on_click=lambda: webbrowser.open(url),
         )
 
-    if open_qt_webview_authorize(url, storage_dir=QT_WEBVIEW_STORAGE_DIR, on_fail=_fallback):
+    def _on_close(rc: Optional[int]):
+        if rc == 0:
+            _schedule_sso_login_cancel("webview_closed")
+
+    if open_qt_webview_authorize(url, storage_dir=QT_WEBVIEW_STORAGE_DIR, on_fail=_fallback, on_close=_on_close):
         try:
             notify("SSO ログイン", "認証画面を最小化で開きました。タスクバーから表示できます。（ウィンドウ名: qwebview_runner.py）")
         except Exception:
@@ -1270,11 +1354,13 @@ class MiniPrompt(wx.Frame):
         sizer.Add(btn, 0, wx.ALL | wx.ALIGN_RIGHT, 12)
         panel.SetSizer(sizer)
 
-        # 半透明（可能な環境のみ）
-        try:
-            self.SetTransparent(190)
-        except Exception:
-            pass
+        # Windows のレイヤードウィンドウでは子コントロールが描画されないことがあるため、
+        # 透過は Windows 以外でのみ有効化する
+        if not platforms.is_windows():
+            try:
+                self.SetTransparent(190)
+            except Exception:
+                pass
 
         # クリックでコールバック
         btn.Bind(wx.EVT_BUTTON, self._on_click)
@@ -1374,6 +1460,110 @@ def _parse_authorize_url(text: str) -> Tuple[Optional[str], Optional[str]]:
     return url, code
 
 
+def _clear_sso_login_proc(proc: Optional[subprocess.Popen] = None) -> None:
+    global _sso_login_proc, _sso_login_proc_profile, _sso_login_proc_region
+    with _sso_login_proc_lock:
+        if proc is None or proc is _sso_login_proc:
+            _sso_login_proc = None
+            _sso_login_proc_profile = None
+            _sso_login_proc_region = None
+
+
+def _terminate_sso_login_proc(proc: subprocess.Popen, reason: str) -> None:
+    if proc is None:
+        return
+    try:
+        if proc.poll() is not None:
+            return
+    except Exception:
+        pass
+    try:
+        log_message(f"[wx-auth-url] terminate aws sso login ({reason})")
+        proc.terminate()
+        if hasattr(proc, "wait"):
+            try:
+                proc.wait(timeout=2)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    try:
+        if proc.poll() is None:
+            log_message(f"[wx-auth-url] kill aws sso login ({reason})")
+            proc.kill()
+            if hasattr(proc, "wait"):
+                try:
+                    proc.wait(timeout=1)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def _set_sso_login_proc(proc: subprocess.Popen, profile: str, region: str) -> None:
+    global _sso_login_proc, _sso_login_proc_profile, _sso_login_proc_region
+    prev = None
+    with _sso_login_proc_lock:
+        prev = _sso_login_proc
+    if prev and prev is not proc:
+        _terminate_sso_login_proc(prev, "superseded")
+    with _sso_login_proc_lock:
+        _sso_login_proc = proc
+        _sso_login_proc_profile = profile
+        _sso_login_proc_region = region
+
+    def _wait():
+        try:
+            if hasattr(proc, "wait"):
+                proc.wait()
+            else:
+                # DummyProc 対応: poll を軽く回す
+                for _ in range(20):
+                    if proc.poll() is not None:
+                        break
+                    time.sleep(0.2)
+        except Exception:
+            pass
+        _clear_sso_login_proc(proc)
+
+    threading.Thread(target=_wait, daemon=True).start()
+
+
+def _schedule_sso_login_cancel(reason: str, grace_seconds: float = SSO_LOGIN_CANCEL_GRACE_SECONDS) -> None:
+    with _sso_login_proc_lock:
+        proc = _sso_login_proc
+        profile = _sso_login_proc_profile
+        region = _sso_login_proc_region
+
+    if proc is None:
+        return
+    try:
+        if proc.poll() is not None:
+            _clear_sso_login_proc(proc)
+            return
+    except Exception:
+        pass
+
+    def _worker():
+        time.sleep(max(0.0, grace_seconds))
+        try:
+            if proc.poll() is not None:
+                _clear_sso_login_proc(proc)
+                return
+        except Exception:
+            pass
+        try:
+            if profile and region and is_sso_session_valid(profile, region):
+                log_message("[wx-auth-url] session valid; skip cancel")
+                return
+        except Exception:
+            pass
+        _terminate_sso_login_proc(proc, reason)
+        _clear_sso_login_proc(proc)
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout: int) -> Tuple[Optional[str], Optional[str]]:
     """
     aws sso login --no-browser を実行し、認可URLとコードを抽出する（GUI非依存）。
@@ -1400,14 +1590,16 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
             proc = subprocess.Popen(cmd, stdin=slave_fd, stdout=slave_fd, stderr=slave_fd, text=True)
             read_fds = [master_fd]
         else:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
             read_fds = []
+        _set_sso_login_proc(proc, profile, region)
     except Exception as e:
         log_message(f"[wx-auth-url] failed to start aws sso login: {e}")
         if master_fd:
             os.close(master_fd)
         if slave_fd:
             os.close(slave_fd)
+        _clear_sso_login_proc()
         return None, None
 
     try:
@@ -1438,21 +1630,58 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
                     if url:
                         break
             else:
-                # Windows など select/pty が使えない環境ではまとめて読み取る
-                try:
-                    out, err = proc.communicate(timeout=max_wait)
-                except subprocess.TimeoutExpired:
+                # Windows など PTY/Select が使えない環境では、別スレッドで stdout/stderr を逐次読む
+                line_q: queue.Queue[Tuple[str, str]] = queue.Queue()
+
+                def _reader(name: str, stream):
                     try:
-                        proc.kill()
+                        for line in iter(stream.readline, ""):
+                            line_q.put((name, line))
                     except Exception:
                         pass
-                    out, err = proc.communicate()
-                stdout_acc += out or ""
-                stderr_acc += err or ""
-            u, c = _parse_authorize_url(stdout_acc)
-            if u:
-                url, code = u, c
-                log_message(f"[wx-auth-url] authorize url fetched (pipe): {u}")
+                    finally:
+                        try:
+                            stream.close()
+                        except Exception:
+                            pass
+
+                if proc.stdout:
+                    threading.Thread(target=_reader, args=("stdout", proc.stdout), daemon=True).start()
+                if proc.stderr:
+                    threading.Thread(target=_reader, args=("stderr", proc.stderr), daemon=True).start()
+
+                while time.time() < deadline:
+                    try:
+                        src, line = line_q.get(timeout=0.5)
+                        if src == "stdout":
+                            stdout_acc += line
+                        else:
+                            stderr_acc += line
+                        u, c = _parse_authorize_url(stdout_acc + "\n" + stderr_acc)
+                        if u:
+                            url, code = u, c
+                            log_message(f"[wx-auth-url] authorize url fetched (pipe): {u}")
+                            break
+                    except queue.Empty:
+                        pass
+                    if proc.poll() is not None and line_q.empty():
+                        break
+
+                # 残りを軽く吸い上げる
+                while not line_q.empty():
+                    try:
+                        src, line = line_q.get_nowait()
+                    except queue.Empty:
+                        break
+                    if src == "stdout":
+                        stdout_acc += line
+                    else:
+                        stderr_acc += line
+                if not url:
+                    u, c = _parse_authorize_url(stdout_acc + "\n" + stderr_acc)
+                    if u:
+                        url, code = u, c
+                        log_message(f"[wx-auth-url] authorize url fetched (pipe): {u}")
         except Exception as e:
             log_message(f"[wx-auth-url] error while reading: {e}")
             try:
@@ -1493,6 +1722,7 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
                         pass
                 except Exception:
                     pass
+            _clear_sso_login_proc(proc)
         if use_pty:
             for fd in (master_fd, slave_fd):
                 if fd is not None:

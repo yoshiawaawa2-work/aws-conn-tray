@@ -10,15 +10,12 @@
     <string>/Users/YOUR_USERNAME/aws-conn-tray/.venv/bin/python3</string>
     <string>/Users/YOUR_USERNAME/aws-conn-tray/tray_app.py</string>
   </array>
-  <key>WorkingDirectory</key>
-  <string>/Users/YOUR_USERNAME/aws-conn-tray</string>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
-  <false/>
-  <key>StandardOutPath</key>
-  <string>/Users/YOUR_USERNAME/Library/Logs/aws_conn_tray.out.log</string>
-  <key>StandardErrorPath</key>
-  <string>/Users/YOUR_USERNAME/Library/Logs/aws_conn_tray.err.log</string>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
 </dict>
 </plist>
