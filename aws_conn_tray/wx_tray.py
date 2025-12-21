@@ -123,6 +123,7 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
         self.cb_quit = on_quit
         self.cb_quit_disable_autostart = on_quit_disable_autostart
         self.forward_statuses: Dict[str, str] = forward_statuses or {}
+        self._status_bitmap_cache: Dict[str, "wx.Bitmap"] = {}
         self.set_icon_color("red")
         # 左右クリックどちらでもメニューを開けるようにする
         self.Bind(wx.adv.EVT_TASKBAR_LEFT_DOWN, self._on_taskbar_click)
@@ -160,9 +161,14 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
             header = menu.Append(-1, "▼ フォワード状態（クリック不可）")
             header.Enable(False)
             for name, status in self.forward_statuses.items():
-                emoji = {"red": "🟥", "yellow": "🟨", "green": "🟩"}.get(status, "⬜")
-                item = menu.Append(-1, f"{emoji} {name}")
+                item = menu.Append(-1, name)
                 item.Enable(False)  # インジケータのみ
+                try:
+                    bmp = self._get_status_bitmap(status)
+                    if bmp and bmp.IsOk():
+                        item.SetBitmap(bmp)
+                except Exception:
+                    pass
             menu.AppendSeparator()
             # 個別再接続
             for name in self.forward_statuses.keys():
@@ -184,6 +190,40 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
             self.SetIcon(icon, "aws-conn-tray")
         except Exception as e:
             log_message(f"[wx] icon set failed: {e}")
+
+    def _get_status_bitmap(self, status: str) -> Optional["wx.Bitmap"]:
+        if wx is None:
+            return None
+        if status in self._status_bitmap_cache:
+            return self._status_bitmap_cache[status]
+        color_map = {
+            "green": wx.Colour(34, 160, 0),
+            "yellow": wx.Colour(226, 160, 0),
+            "red": wx.Colour(200, 60, 50),
+        }
+        color = color_map.get(status, wx.Colour(136, 136, 136))
+        size = 14
+        try:
+            bmp = wx.Bitmap(size, size, 32)
+        except Exception:
+            bmp = wx.Bitmap(size, size)
+        dc = wx.MemoryDC(bmp)
+        try:
+            dc.SetBackground(wx.Brush(wx.Colour(0, 0, 0, 0)))
+            dc.Clear()
+            gc = wx.GraphicsContext.Create(dc)
+            if gc:
+                gc.SetBrush(wx.Brush(color))
+                gc.SetPen(wx.Pen(wx.Colour(0, 0, 0, 0)))
+                gc.DrawEllipse(1, 1, size - 2, size - 2)
+            else:
+                dc.SetBrush(wx.Brush(color))
+                dc.SetPen(wx.Pen(color))
+                dc.DrawCircle(size // 2, size // 2, (size - 2) // 2)
+        finally:
+            dc.SelectObject(wx.NullBitmap)
+        self._status_bitmap_cache[status] = bmp
+        return bmp
 
     def on_settings(self, _evt=None):
         if self.cb_settings:

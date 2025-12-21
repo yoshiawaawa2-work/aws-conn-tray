@@ -25,5 +25,9 @@ def test_status_menu_item_style(monkeypatch):
     labels = [item.GetItemLabelText() for item in menu.GetMenuItems()]
     # メインメニュー上にヘッダーが存在し、インジケータが並んでいること
     assert any("フォワード状態" in lbl for lbl in labels)
-    assert any("🟥 rds" in lbl for lbl in labels)
+    assert any(lbl == "rds" for lbl in labels)
+    assert any(lbl == "apprunner" for lbl in labels)
+    status_items = [item for item in menu.GetMenuItems() if item.GetItemLabelText() in {"rds", "apprunner"}]
+    assert status_items
+    assert all(item.GetBitmap().IsOk() for item in status_items)
     app.ExitMainLoop()
