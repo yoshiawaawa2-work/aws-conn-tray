@@ -884,9 +884,12 @@ class WxTrayApp:
                         self.config.sso_start_url,
                         timeout=self.config.sso_login_timeout_seconds,
                     )
-                    if url and "authorize" in url.lower():
+                    if url:
                         url_to_open = url
-                        log_message(f"[webview-launch] authorize url fetched: {url}")
+                        if "authorize" in url.lower():
+                            log_message(f"[webview-launch] authorize url fetched: {url}")
+                        else:
+                            log_message(f"[webview-launch] device url fallback: {url}")
                     else:
                         # ここで繰り返し _show_sso_prompt を出すと「開く」→再取得失敗→再度「開く」で無限ループになる。
                         # 認可URLが取れない場合は AWS CLI やネットワーク前提が満たされていないと推測し、
@@ -1445,6 +1448,7 @@ def _parse_authorize_url(text: str) -> Tuple[Optional[str], Optional[str]]:
     """
     url = None
     code = None
+    non_authorize_url = None
     urls = [m.strip().rstrip(".") for m in re.findall(r"https?://\S+", text)]
     if urls:
         # 先頭の URL を採用。authorize が含まれている場合はその方がより確実なので優先。
@@ -1576,6 +1580,7 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
     deadline = time.time() + max_wait
     url = None
     code = None
+    non_authorize_url = None
     stdout_acc = ""
     stderr_acc = ""
 
@@ -1623,10 +1628,15 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
                         # 改行がまだ来ていない場合は URL が途中の可能性があるため、確定は遅らせる
                         has_line_break = "\n" in stdout_acc or "\r" in stdout_acc
                         if u and (has_line_break or (proc and proc.poll() is not None)):
-                            # authorize を含まなくても先頭の URL を採用し、取りこぼしを防ぐ
-                            url, code = u, c
-                            log_message(f"[wx-auth-url] authorize url fetched (stream): {u}")
-                            break
+                            if c and not code:
+                                code = c
+                            if "authorize" in u.lower():
+                                url, code = u, c or code
+                                log_message(f"[wx-auth-url] authorize url fetched (stream): {u}")
+                                break
+                            if non_authorize_url is None:
+                                non_authorize_url = u
+                                log_message(f"[wx-auth-url] non-authorize url seen (stream): {u}")
                     if url:
                         break
             else:
@@ -1659,9 +1669,15 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
                             stderr_acc += line
                         u, c = _parse_authorize_url(stdout_acc + "\n" + stderr_acc)
                         if u:
-                            url, code = u, c
-                            log_message(f"[wx-auth-url] authorize url fetched (pipe): {u}")
-                            break
+                            if c and not code:
+                                code = c
+                            if "authorize" in u.lower():
+                                url, code = u, c or code
+                                log_message(f"[wx-auth-url] authorize url fetched (pipe): {u}")
+                                break
+                            if non_authorize_url is None:
+                                non_authorize_url = u
+                                log_message(f"[wx-auth-url] non-authorize url seen (pipe): {u}")
                     except queue.Empty:
                         pass
                     if proc.poll() is not None and line_q.empty():
@@ -1679,9 +1695,13 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
                         stderr_acc += line
                 if not url:
                     u, c = _parse_authorize_url(stdout_acc + "\n" + stderr_acc)
-                    if u:
-                        url, code = u, c
+                    if c and not code:
+                        code = c
+                    if u and "authorize" in u.lower():
+                        url, code = u, c or code
                         log_message(f"[wx-auth-url] authorize url fetched (pipe): {u}")
+                    elif u and non_authorize_url is None:
+                        non_authorize_url = u
         except Exception as e:
             log_message(f"[wx-auth-url] error while reading: {e}")
             try:
@@ -1693,10 +1713,18 @@ def _fetch_authorize_url(profile: str, region: str, sso_start_url: str, timeout:
         log_message(f"[wx-auth-url] rc={rc} stdout_len={len(stdout_acc)} stderr_len={len(stderr_acc)}")
 
         if not url:
-            # 最終的に見つからなければ結合して再度パース
+            # 最終的に見つからなければ結合して再度パース（authorize 優先）
             u2, c2 = _parse_authorize_url(stdout_acc + "\n" + stderr_acc)
-            if u2:
-                url, code = u2, c2
+            if c2 and not code:
+                code = c2
+            if u2 and "authorize" in u2.lower():
+                url, code = u2, c2 or code
+            elif u2 and non_authorize_url is None:
+                non_authorize_url = u2
+
+        if not url and non_authorize_url:
+            url = non_authorize_url
+            log_message(f"[wx-auth-url] authorize url not found; using device url fallback: {url}")
 
         if not url:
             log_message(f"[wx-auth-url] authorize url not found. stdout={stdout_acc!r} stderr={stderr_acc!r}")

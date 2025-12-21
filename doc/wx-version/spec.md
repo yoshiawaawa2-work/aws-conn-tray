@@ -9,7 +9,7 @@
 | SSO 認証表示 | PySide6 + QtWebEngine サブプロセス（`aws_conn_tray.qwebview_runner`）。認可 URL を開き、`127.0.0.1/.../oauth/callback?code=` を検知して自動クローズ。|
 | WebView ストレージ | QtWebEngine の persistent storage を `~/.cache/aws_conn_tray/qt-webview` に設定し、クッキーを永続化。|
 | フォールバック | WebView 起動失敗/クラッシュ時はミニダイアログと通知でブラウザ起動を促す。|
-| 認可 URL 取得 | `aws sso login --no-browser --profile <profile> --region <region>` を実行し stdout/pty から URL+コードをパース（authorize を含まなくても先頭 URL を採用）。|
+| 認可 URL 取得 | `aws sso login --no-browser --profile <profile> --region <region>` を実行し stdout/pty から URL+コードをパース（authorize を優先し、見つからない場合は device URL をフォールバックで採用）。|
 | トークン監視/自動更新 | `tunnel_check_interval_seconds` ごとに残り秒数を確認し、`sso_auto_refresh_margin_seconds` 以内なら自動で認可 URL を取得→WebView を開く。|
 | ミニダイアログ | トークン無効/URL 取得失敗時に右下へ半透明ダイアログを表示。「開く」で WebView/ブラウザ起動。|
 | 通知 | トークン無効、WebView 失敗、ポート衝突などでデスクトップ通知。クリックでブラウザを開く場合あり。|

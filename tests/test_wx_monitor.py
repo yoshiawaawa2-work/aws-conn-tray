@@ -611,7 +611,7 @@ def test_get_primary_forward_prefers_config_forwards(monkeypatch):
 
 def test_fetch_authorize_url_accepts_non_authorize_url(monkeypatch):
     """
-    aws sso login の出力が device.sso... のように authorize を含まない場合でも URL を拾えることを検証。
+    authorize が出ない場合は device.sso... の URL をフォールバックで採用することを検証。
     """
     # PTY を使わないルートで動作させるために明示的に無効化
     monkeypatch.setattr(wx_tray, "PTY_AVAILABLE", False)
@@ -627,7 +627,7 @@ def test_fetch_authorize_url_accepts_non_authorize_url(monkeypatch):
                 "WXYZ-1234\n"
             )
             self.stderr = io.StringIO("")
-            self._rc = None
+            self._rc = 0
             self.returncode = 0
         def poll(self):
             return self._rc
@@ -636,8 +636,36 @@ def test_fetch_authorize_url_accepts_non_authorize_url(monkeypatch):
 
     url, code = wx_tray._fetch_authorize_url("p", "r", "https://start.example.com", timeout=5)
 
-    assert "device.sso" in url  # authorize を含まない URL でも拾える
+    assert "device.sso" in url
     assert code in (None, "WXYZ-1234")
+
+
+def test_fetch_authorize_url_prefers_authorize(monkeypatch):
+    """
+    device URL が先に出ても、authorize URL が後から出ればそれを優先して採用する。
+    """
+    monkeypatch.setattr(wx_tray, "PTY_AVAILABLE", False)
+    monkeypatch.setattr(wx_tray, "log_message", lambda *a, **k: None)
+
+    import io
+
+    class DummyProc:
+        def __init__(self):
+            self.stdout = io.StringIO(
+                "Open https://device.sso.ap-northeast-1.amazonaws.com/ and enter code\n"
+                "Then visit https://oidc.example.com/authorize?code=ABC\n"
+            )
+            self.stderr = io.StringIO("")
+            self._rc = 0
+            self.returncode = 0
+        def poll(self):
+            return self._rc
+
+    monkeypatch.setattr(wx_tray.subprocess, "Popen", lambda *a, **k: DummyProc())
+
+    url, _ = wx_tray._fetch_authorize_url("p", "r", "https://start.example.com", timeout=5)
+
+    assert "authorize" in (url or "")
 
 
 def test_fetch_authorize_url_reads_chunked_authorize(monkeypatch):
