@@ -72,18 +72,40 @@ def test_create_zip_excludes_build(tmp_path):
     assert "build/skip.txt" not in names
 
 
-def test_enable_autostart_windows(monkeypatch):
+def test_enable_autostart_windows(monkeypatch, tmp_path):
     monkeypatch.setattr(installer_core.platforms, "is_windows", lambda: True)
     monkeypatch.setattr(installer_core.platforms, "is_macos", lambda: False)
-    seen = []
+    seen = {}
 
-    def fake_run(cmd, check=False):
-        seen.append(cmd)
-        return type("R", (), {"returncode": 0})()
+    def fake_elevated(cmd):
+        seen["cmd"] = cmd
+        return 0
 
-    installer_core.enable_autostart(Path("C:/app"), dry_run=False, runner=fake_run)
+    monkeypatch.setattr(installer_core, "_run_windows_elevated", fake_elevated)
 
-    assert any("schtasks" in c for c in seen[0])
+    install_dir = tmp_path / "app"
+    install_dir.mkdir()
+    (install_dir / "tray_app.py").write_text("print('x')", encoding="utf-8")
+
+    installer_core.enable_autostart(install_dir, dry_run=False)
+
+    assert seen["cmd"][0] == "schtasks"
+    assert "/XML" in seen["cmd"]
+
+
+def test_enable_autostart_windows_dry_run(monkeypatch, tmp_path):
+    monkeypatch.setattr(installer_core.platforms, "is_windows", lambda: True)
+    monkeypatch.setattr(installer_core.platforms, "is_macos", lambda: False)
+
+    install_dir = tmp_path / "app"
+    install_dir.mkdir()
+    (install_dir / "tray_app.py").write_text("print('x')", encoding="utf-8")
+
+    cmds = installer_core.enable_autostart(install_dir, dry_run=True)
+
+    assert cmds
+    assert cmds[0][0] == "schtasks"
+    assert "/XML" in cmds[0]
 
 
 def test_enable_autostart_linux_uses_venv(monkeypatch, tmp_path):
@@ -117,7 +139,51 @@ def test_enable_autostart_macos_uses_venv(monkeypatch, tmp_path):
     assert plist_path.exists()
     content = plist_path.read_text(encoding="utf-8")
     assert str(installer_core._venv_python_path(install_dir)) in content
+    assert "<key>KeepAlive</key>" in content
+    assert "<key>SuccessfulExit</key><false/>" in content
     assert any("launchctl" in cmd[0] for cmd in cmds)
+
+
+def test_disable_autostart_macos_removes_plist(monkeypatch, tmp_path):
+    monkeypatch.setattr(installer_core.platforms, "is_windows", lambda: False)
+    monkeypatch.setattr(installer_core.platforms, "is_macos", lambda: True)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    plist = tmp_path / "Library" / "LaunchAgents" / "aws.conn.tray.plist"
+    plist.parent.mkdir(parents=True, exist_ok=True)
+    plist.write_text("x", encoding="utf-8")
+
+    seen = []
+
+    def fake_runner(cmd, check=False, **kwargs):
+        seen.append(cmd)
+        return type("R", (), {"returncode": 0})()
+
+    installer_core.disable_autostart(dry_run=False, runner=fake_runner)
+
+    assert not plist.exists()
+    assert seen and seen[0][:2] == ["launchctl", "unload"]
+
+
+def test_disable_autostart_linux_removes_service(monkeypatch, tmp_path):
+    monkeypatch.setattr(installer_core.platforms, "is_windows", lambda: False)
+    monkeypatch.setattr(installer_core.platforms, "is_macos", lambda: False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    service = tmp_path / ".config" / "systemd" / "user" / "aws-conn-tray.service"
+    service.parent.mkdir(parents=True, exist_ok=True)
+    service.write_text("x", encoding="utf-8")
+
+    seen = []
+
+    def fake_runner(cmd, check=False, **kwargs):
+        seen.append(cmd)
+        return type("R", (), {"returncode": 0})()
+
+    installer_core.disable_autostart(dry_run=False, runner=fake_runner)
+
+    assert not service.exists()
+    assert len(seen) >= 2
+    assert seen[0][:3] == ["systemctl", "--user", "disable"]
+    assert seen[1][:3] == ["systemctl", "--user", "daemon-reload"]
 
 
 def test_perform_install_preview(monkeypatch, tmp_path):

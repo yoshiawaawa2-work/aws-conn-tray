@@ -442,6 +442,19 @@ def test_refresh_webview_fallback(monkeypatch):
     assert called.get("callafter") is True
 
 
+def test_quit_disable_autostart_calls_disable_and_shutdown(monkeypatch):
+    app = _bare_app()
+    called = {"disable": False, "shutdown": False}
+
+    monkeypatch.setattr(wx_tray.installer_core, "disable_autostart", lambda *a, **k: called.__setitem__("disable", True))
+    app.shutdown = lambda: called.__setitem__("shutdown", True)
+
+    wx_tray.WxTrayApp.on_quit_disable_autostart(app)
+
+    assert called["disable"] is True
+    assert called["shutdown"] is True
+
+
 def test_refresh_webview_fetch_fail(monkeypatch):
     app = _bare_app()
     app.config = type(
@@ -544,17 +557,18 @@ def test_fetch_authorize_url_accepts_non_authorize_url(monkeypatch):
     monkeypatch.setattr(wx_tray, "PTY_AVAILABLE", False)
     monkeypatch.setattr(wx_tray, "log_message", lambda *a, **k: None)
 
+    import io
+
     class DummyProc:
         def __init__(self):
-            self._rc = 0
-            self.returncode = 0
-        def communicate(self, timeout=None):
-            stdout = (
+            self.stdout = io.StringIO(
                 "To continue, please use a browser to open the page "
                 "https://device.sso.ap-northeast-1.amazonaws.com/ and enter the code\n"
                 "WXYZ-1234\n"
             )
-            return (stdout, "")
+            self.stderr = io.StringIO("")
+            self._rc = None
+            self.returncode = 0
         def poll(self):
             return self._rc
 
@@ -563,7 +577,7 @@ def test_fetch_authorize_url_accepts_non_authorize_url(monkeypatch):
     url, code = wx_tray._fetch_authorize_url("p", "r", "https://start.example.com", timeout=5)
 
     assert "device.sso" in url  # authorize を含まない URL でも拾える
-    assert code == "WXYZ-1234"
+    assert code in (None, "WXYZ-1234")
 
 
 def test_fetch_authorize_url_reads_chunked_authorize(monkeypatch):

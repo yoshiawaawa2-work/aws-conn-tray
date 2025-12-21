@@ -10,7 +10,7 @@ Linux / Windows / macOS の 3OS で動作し、インストーラが仮想環境
 - SSO 監視と再ログイン: `~/.aws/sso/cache/*.json` を監視し、期限前後で通知・ミニダイアログ表示。Qt WebView で認証画面を非アクティブ起動し、失敗時はブラウザにフォールバック。
 - SSM ポートフォワード監視: `AWS-StartPortForwardingSessionToRemoteHost` を起動・監視・自動再接続。ローカルポート衝突時はリトライ/通知。
 - 設定編集: トレイメニューの「⚙️ 設定」、またはショートカット「AWS Conn Tray - 設定編集」で GUI 編集。必須チェック・デフォルトボタン・ペーストボタン付き。設定保存時に起動中アプリは自動再起動、未起動なら保存のみ。
-- 自動起動切替 GUI: 「AWS Conn Tray - 自動起動解除」ショートカットで開く Tk 画面から登録/解除をトグル。状態表示付き、`.venv` の Python と `tray_app.py` を使う service/plist/タスクを生成。
+- 自動起動切替 GUI: 「AWS Conn Tray - 自動起動解除」ショートカットで開く Tk 画面から登録/解除をトグル。状態表示付き、`.venv` の Python と `tray_app.py` を使う service/plist/タスクを生成。解除時は起動中のアプリに終了要求を送ります。
 - インストーラ/アンインストーラ: Tk ウィザードで前提チェック → venv 作成 → `pip install -r requirements.txt` → 最低限ファイルの配置 → 自動起動登録。アンインストーラはメタデータを参照して安全に削除。
 - 単一インスタンス: fasteners（なければポートバインド）でロックし、二重起動を防止。設定編集モードも別ロックで多重起動を抑止。
 

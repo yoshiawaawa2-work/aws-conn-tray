@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import subprocess
 import tkinter as tk
@@ -44,7 +45,50 @@ def toggle_autostart(enable: bool, install_dir: str | Path | None = None):
     install_dir = _get_install_dir(install_dir)
     if enable:
         return installer_core.enable_autostart(install_dir, dry_run=False)
-    return installer_core.disable_autostart(dry_run=False)
+    result = installer_core.disable_autostart(dry_run=False)
+    _request_app_exit(install_dir)
+    return result
+
+
+def _request_app_exit(install_dir: str | Path | None = None) -> bool:
+    """
+    可能な範囲で実行中の tray_app.py に終了要求を送る（ベストエフォート）。
+    """
+    try:
+        import psutil
+    except Exception:
+        return False
+    target_dir = Path(install_dir).resolve() if install_dir else None
+    me = os.getpid()
+    stopped = False
+    for proc in psutil.process_iter(["pid", "cmdline"]):
+        try:
+            if proc.info.get("pid") == me:
+                continue
+            cmdline = proc.info.get("cmdline") or []
+            if not any("tray_app.py" in (c or "") for c in cmdline):
+                continue
+            if target_dir:
+                if not any(str(target_dir) in (c or "") for c in cmdline):
+                    continue
+            proc.terminate()
+            stopped = True
+        except Exception:
+            continue
+    if not stopped:
+        return False
+    for proc in psutil.process_iter(["pid", "cmdline"]):
+        try:
+            cmdline = proc.info.get("cmdline") or []
+            if not any("tray_app.py" in (c or "") for c in cmdline):
+                continue
+            if target_dir:
+                if not any(str(target_dir) in (c or "") for c in cmdline):
+                    continue
+            proc.wait(timeout=5)
+        except Exception:
+            continue
+    return True
 
 
 def is_autostart_enabled(install_dir: str | Path | None = None, runner=subprocess.run) -> bool:
