@@ -114,8 +114,35 @@ def test_start_sso_login_webview_fallback(monkeypatch):
     ok = wx_tray.start_sso_login_webview("https://example.com/auth", timeout_seconds=10)
     assert ok is False
     assert "msg" in called_prompt
-    assert "WebView を開けませんでした" in called_prompt["msg"]
+    assert "認証画面を開けませんでした" in called_prompt["msg"]
     assert called_prompt.get("cancel_reason") == "browser_fallback"
+
+
+def test_start_sso_login_webview_close_skips_prompt_when_session_valid(monkeypatch):
+    called = {}
+    stub_app = type("App", (), {})()
+    stub_tray = type("Tray", (), {})()
+    stub_tray.config = type("C", (), {"sso_start_url": "https://start.example.com"})()
+    stub_tray._get_primary_forward = lambda: type("F", (), {"profile": "p", "region": "r"})()
+    stub_tray._show_browser_prompt = lambda *a, **k: called.setdefault("prompt", True)
+    stub_app._tray_app = stub_tray
+
+    monkeypatch.setattr(wx_tray.wx, "GetApp", lambda: stub_app)
+    monkeypatch.setattr(wx_tray, "check_sso_token", lambda *a, **k: (True, 100))
+    monkeypatch.setattr(wx_tray, "is_sso_session_valid", lambda p, r: True)
+    monkeypatch.setattr(wx_tray, "_schedule_sso_login_cancel", lambda *a, **k: called.setdefault("cancel", True))
+
+    def fake_open(url, storage_dir=None, on_fail=None, on_close=None):
+        if on_close:
+            on_close(0, "", "")
+        return True
+
+    monkeypatch.setattr(wx_tray, "open_qt_webview_authorize", fake_open)
+
+    ok = wx_tray.start_sso_login_webview("https://oidc.example.com/authorize", timeout_seconds=10)
+    assert ok is True
+    assert "prompt" not in called
+    assert "cancel" not in called
 
 
 def test_qt_webview_crash_triggers_browser_fallback(monkeypatch):
@@ -170,7 +197,7 @@ def test_qt_webview_close_triggers_cancel(monkeypatch):
 
     monkeypatch.setattr(wx_tray.subprocess, "Popen", lambda *a, **k: DummyProc())
     monkeypatch.setattr(wx_tray, "_schedule_sso_login_cancel", lambda reason, grace_seconds=0: (called.setdefault("reason", reason), done.set()))
-    ok = wx_tray.open_qt_webview_authorize("https://example.com", on_close=lambda rc: wx_tray._schedule_sso_login_cancel("webview_closed", grace_seconds=0))
+    ok = wx_tray.open_qt_webview_authorize("https://example.com", on_close=lambda rc, _out, _err: wx_tray._schedule_sso_login_cancel("webview_closed", grace_seconds=0))
     assert ok is True
     assert done.wait(timeout=1.0)
     assert called["reason"] == "webview_closed"
@@ -256,6 +283,27 @@ def test_show_prompts_wrap_text(monkeypatch):
     assert called.get("message", "").startswith("WRAP:")
     assert called.get("button") == "開く"
     assert called.get("user_code") is None
+
+
+def test_device_code_prompt_hides_open_button(monkeypatch):
+    app = _bare_app()
+    app._webview_running = False
+    called = {}
+
+    class DummyPrompt:
+        def __init__(self, message, on_click=None, button_label="開く", user_code=None):
+            called["message"] = message
+            called["button"] = button_label
+            called["user_code"] = user_code
+        def show_bottom_right(self):
+            called["shown"] = True
+
+    monkeypatch.setattr(wx_tray, "MiniPrompt", DummyPrompt)
+    app._show_device_code_prompt("https://d.example.com/start/#/device?user_code=ABCD-EFGH", "ABCD-EFGH")
+
+    assert called.get("shown") is True
+    assert called.get("button") is None
+    assert called.get("user_code") == "ABCD-EFGH"
 
 
 def test_mini_prompt_size_constants():

@@ -57,6 +57,37 @@ FAIL_AUTH_URL_MESSAGE = (
 DEVICE_CODE_MESSAGE = (
     "SSO ログイン用の\n"
     "認証コードです。\n"
+    "ログイン画面で\n"
+    "必要ならコードを\n"
+    "入力してください。"
+)
+DEVICE_CODE_FALLBACK_MESSAGE = (
+    "SSO ログイン用の\n"
+    "認証コードです。\n"
+    "右下の「開く」で\n"
+    "ログイン画面を開き、\n"
+    "必要ならコードを\n"
+    "入力してください。"
+)
+WEBVIEW_FAILED_MESSAGE = (
+    "認証画面を開けませんでした。\n"
+    "右下の「開く」から\n"
+    "ブラウザでログインしてください。"
+)
+WEBVIEW_FAILED_DEVICE_MESSAGE = (
+    "認証画面を開けませんでした。\n"
+    "右下の「開く」で\n"
+    "ログイン画面を開き、\n"
+    "必要ならコードを\n"
+    "入力してください。"
+)
+WEBVIEW_CLOSED_MESSAGE = (
+    "認証画面が閉じられました。\n"
+    "右下の「開く」から\n"
+    "再度ログインしてください。"
+)
+WEBVIEW_CLOSED_DEVICE_MESSAGE = (
+    "認証画面が閉じられました。\n"
     "右下の「開く」で\n"
     "ログイン画面を開き、\n"
     "必要ならコードを\n"
@@ -904,7 +935,7 @@ class WxTrayApp:
                 log_message(f"[webview-launch] failed: {e}")
 
         wrapped = _wrap_text_for_prompt(DEVICE_CODE_MESSAGE, width=20)
-        self._mini_prompt = MiniPrompt(message=wrapped, on_click=on_click, button_label="開く", user_code=user_code)
+        self._mini_prompt = MiniPrompt(message=wrapped, on_click=on_click, button_label=None, user_code=user_code)
         self._mini_prompt.show_bottom_right()
 
     def _launch_webview(self, fallback_url: str):
@@ -970,7 +1001,7 @@ class WxTrayApp:
                         wx.CallAfter(self._close_mini_prompt)
                 else:
                     if is_device_url:
-                        wx.CallAfter(self._show_browser_prompt, url_to_open, DEVICE_CODE_MESSAGE, user_code)
+                        wx.CallAfter(self._show_browser_prompt, url_to_open, DEVICE_CODE_FALLBACK_MESSAGE, user_code)
                     else:
                         wx.CallAfter(self._show_browser_prompt, fallback_url, FAIL_AUTH_URL_MESSAGE)
             finally:
@@ -1097,7 +1128,7 @@ def open_qt_webview_authorize(
     url: str,
     storage_dir: Optional[str] = None,
     on_fail: Optional[Callable[[], None]] = None,
-    on_close: Optional[Callable[[Optional[int]], None]] = None,
+    on_close: Optional[Callable[[Optional[int], str, str], None]] = None,
 ) -> bool:
     """
     PySide6 + QtWebEngine をサブプロセスで起動して認可URLを開く。
@@ -1162,7 +1193,7 @@ def open_qt_webview_authorize(
                 log_message(f"[qt-webview] exit rc={rc} stdout={out!r} stderr={err!r}")
                 if on_close:
                     try:
-                        on_close(rc)
+                        on_close(rc, out or "", err or "")
                     except Exception as e:
                         log_message(f"[qt-webview] on_close error: {e}")
                 if rc not in (0, None) and on_fail:
@@ -1174,7 +1205,7 @@ def open_qt_webview_authorize(
                 log_message(f"[qt-webview] wait error: {e}")
                 if on_close:
                     try:
-                        on_close(None)
+                        on_close(None, "", "")
                     except Exception as e2:
                         log_message(f"[qt-webview] on_close error: {e2}")
 
@@ -1213,7 +1244,30 @@ def start_sso_login_webview(url: str, timeout_seconds: Optional[int] = None, use
     """
     if not url:
         return False
+    is_device_url = "authorize" not in url.lower()
+    fail_message = WEBVIEW_FAILED_DEVICE_MESSAGE if is_device_url else WEBVIEW_FAILED_MESSAGE
+    closed_message = WEBVIEW_CLOSED_DEVICE_MESSAGE if is_device_url else WEBVIEW_CLOSED_MESSAGE
     fallback_triggered = {"done": False}
+
+    def _is_session_valid_now() -> bool:
+        try:
+            app = wx.GetApp()
+            tray_app = getattr(app, "_tray_app", None) if app else None
+            if not tray_app or not getattr(tray_app, "config", None):
+                return False
+            token_ok, _ = check_sso_token(expected_start_url=tray_app.config.sso_start_url)
+            if not token_ok:
+                return False
+            forward = None
+            try:
+                forward = tray_app._get_primary_forward()
+            except Exception:
+                forward = None
+            if forward:
+                return is_sso_session_valid(forward.profile, forward.region)
+            return True
+        except Exception:
+            return False
 
     def _fallback():
         # 右下ダイアログでブラウザ誘導。wx コンテキストが無い場合は notify にフォールバック。
@@ -1234,8 +1288,8 @@ def start_sso_login_webview(url: str, timeout_seconds: Optional[int] = None, use
             try:
                 tray_app._show_browser_prompt(
                     url,
-                    "WebView を開けませんでした。右下の「開く」でブラウザを開いてログインしてください。",
-                    user_code=user_code,
+                    fail_message,
+                    user_code=user_code if is_device_url else None,
                 )
                 notify(
                     "SSO ログイン",
@@ -1251,9 +1305,38 @@ def start_sso_login_webview(url: str, timeout_seconds: Optional[int] = None, use
             on_click=lambda: webbrowser.open(url),
         )
 
-    def _on_close(rc: Optional[int]):
-        if rc == 0:
+    def _on_close(rc: Optional[int], out: str, err: str):
+        if rc != 0:
+            return
+        text = f"{out}\n{err}".lower()
+        if "callback detected" in text or "/oauth/callback" in text:
             _schedule_sso_login_cancel("webview_closed")
+            return
+        if _is_session_valid_now():
+            log_message("[webview-close] session valid; skip prompt")
+            return
+        if timeout_seconds:
+            _schedule_sso_login_cancel("webview_closed", grace_seconds=float(timeout_seconds))
+        try:
+            app = wx.GetApp()
+            tray_app = getattr(app, "_tray_app", None) if app else None
+        except Exception:
+            tray_app = None
+        if tray_app and hasattr(tray_app, "_show_browser_prompt"):
+            try:
+                tray_app._show_browser_prompt(
+                    url,
+                    closed_message,
+                    user_code=user_code if is_device_url else None,
+                )
+                return
+            except Exception:
+                pass
+        notify(
+            "SSO ログイン",
+            "認証画面が閉じられました。通知をクリックしてブラウザで開いてください。",
+            on_click=lambda: webbrowser.open(url),
+        )
 
     if open_qt_webview_authorize(url, storage_dir=QT_WEBVIEW_STORAGE_DIR, on_fail=_fallback, on_close=_on_close):
         try:
@@ -1387,7 +1470,13 @@ class MiniPrompt:
     tkinter のミニダイアログをサブプロセスで起動するラッパー。
     """
 
-    def __init__(self, message: str, on_click: Callable[[], None], button_label: str = "開く", user_code: Optional[str] = None):
+    def __init__(
+        self,
+        message: str,
+        on_click: Callable[[], None],
+        button_label: Optional[str] = "開く",
+        user_code: Optional[str] = None,
+    ):
         self.message = message
         self.on_click = on_click
         self.button_label = button_label
@@ -1408,11 +1497,13 @@ class MiniPrompt:
             "aws_conn_tray.tk_mini_prompt",
             "--message",
             self.message,
-            "--button-label",
-            self.button_label,
             "--signal-file",
             self._signal_path,
         ]
+        if self.button_label:
+            cmd += ["--button-label", self.button_label]
+        else:
+            cmd += ["--no-button"]
         if self.user_code:
             cmd += ["--user-code", self.user_code]
         try:

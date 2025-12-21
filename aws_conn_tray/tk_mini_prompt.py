@@ -55,6 +55,7 @@ def show_prompt(
     button_label: str = "開く",
     user_code: Optional[str] = None,
     signal_file: Optional[str] = None,
+    show_button: bool = True,
 ) -> None:
     root = tk.Tk()
     root.title("")
@@ -120,15 +121,16 @@ def show_prompt(
         copy_btn = tk.Button(code_frame, text="コピー", command=on_copy)
         copy_btn.pack(side="left")
 
-    button_row = tk.Frame(frame, bg=bg)
-    button_row.pack(anchor="e", pady=(10, 0), fill="x")
+    if show_button and button_label:
+        button_row = tk.Frame(frame, bg=bg)
+        button_row.pack(anchor="e", pady=(10, 0), fill="x")
 
-    def on_open():
-        _write_signal(signal_file, "open")
-        root.destroy()
+        def on_open():
+            _write_signal(signal_file, "open")
+            root.destroy()
 
-    open_btn = tk.Button(button_row, text=button_label, command=on_open)
-    open_btn.pack(side="right")
+        open_btn = tk.Button(button_row, text=button_label, command=on_open)
+        open_btn.pack(side="right")
 
     def on_close():
         root.destroy()
@@ -157,6 +159,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--message", required=True)
     parser.add_argument("--button-label", default="開く")
+    parser.add_argument("--no-button", action="store_true")
     parser.add_argument("--user-code", default=None)
     parser.add_argument("--auth-url", default=None)
     parser.add_argument("--signal-file", default=None)
@@ -171,6 +174,7 @@ def main() -> int:
         button_label=args.button_label,
         user_code=user_code,
         signal_file=args.signal_file,
+        show_button=not args.no_button,
     )
     return 0
 
