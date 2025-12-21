@@ -11,7 +11,7 @@
 | フォールバック | WebView 起動失敗/クラッシュ時はミニダイアログと通知でブラウザ起動を促す。|
 | 認可 URL 取得 | `aws sso login --no-browser --profile <profile> --region <region>` を実行し stdout/pty から URL+コードをパース（authorize を優先し、見つからない場合は device URL をフォールバックで採用）。|
 | トークン監視/自動更新 | `tunnel_check_interval_seconds` ごとに残り秒数を確認し、`sso_auto_refresh_margin_seconds` 以内なら自動で認可 URL を取得→WebView を開く。|
-| ミニダイアログ | トークン無効/URL 取得失敗時に右下へ半透明ダイアログを表示。「開く」で WebView/ブラウザ起動。|
+| ミニダイアログ | tkinter で右下に半透明ダイアログを表示。「開く」で WebView/ブラウザ起動。device URL の場合は認証コードとコピーを表示。|
 | 通知 | トークン無効、WebView 失敗、ポート衝突などでデスクトップ通知。クリックでブラウザを開く場合あり。|
 | ポートフォワード | AWS SSM ポートフォワードを起動・監視。切断時は自動再接続。ローカルポート衝突時はログ・通知・リトライ（最大 3 回）。|
 | 設定ダイアログ | `config/config.json` を複数タブ（forwards 配列）で編集。必須文字列/整数をバリデーション。保存時に自動再起動。設定専用起動（`tray_app.py --settings`）では本体が起動している場合のみ再起動。|

@@ -13,6 +13,8 @@ import select
 import time
 import webbrowser
 import queue
+import tempfile
+from urllib.parse import urlparse, parse_qs
 
 try:
     import wx
@@ -51,6 +53,14 @@ FAIL_AUTH_URL_MESSAGE = (
     "（AWS CLI が未設定/\n"
     "ネットワーク不通などの\n"
     "可能性があります）"
+)
+DEVICE_CODE_MESSAGE = (
+    "SSO ログイン用の\n"
+    "認証コードです。\n"
+    "右下の「開く」で\n"
+    "ログイン画面を開き、\n"
+    "必要ならコードを\n"
+    "入力してください。"
 )
 # Qt WebView サブプロセス管理用
 _qt_webview_procs: List[subprocess.Popen] = []
@@ -296,6 +306,7 @@ class WxTrayApp:
         self._notified_invalid = False
         self._last_webview_frame: Optional[wx.Frame] = None
         self._mini_prompt: Optional["MiniPrompt"] = None
+        self._mini_prompt_mode: Optional[str] = None
         self._webview_running = False
         self._shutting_down = False
         # マルチフォワードの代表（認可URL取得などで使用）をキャッシュする
@@ -555,10 +566,19 @@ class WxTrayApp:
                     self.config.sso_start_url,
                     timeout=self.config.sso_login_timeout_seconds,
                 )
-                if url and "authorize" in url.lower():
-                    log_message(f"[wx-refresh] authorize url fetched: {url}")
+                if url:
+                    if "authorize" in url.lower():
+                        log_message(f"[wx-refresh] authorize url fetched: {url}")
+                    else:
+                        log_message(f"[wx-refresh] device url fallback: {url}")
+                        user_code = _extract_user_code(url, code)
+                        call_ui(lambda: self._show_device_code_prompt(url, user_code))
                     # 自動で WebView を開き、失敗時は MiniPrompt/通知がフォールバック
-                    call_ui(lambda: start_sso_login_webview(url, timeout_seconds=self.config.sso_login_timeout_seconds))
+                    call_ui(lambda: start_sso_login_webview(
+                        url,
+                        timeout_seconds=self.config.sso_login_timeout_seconds,
+                        user_code=_extract_user_code(url, code),
+                    ))
                 else:
                     # 自動更新時も同じ考え方でブラウザ誘導に切り替える
                     call_ui(lambda: self._show_browser_prompt(self.config.sso_start_url, FAIL_AUTH_URL_MESSAGE))
@@ -807,7 +827,7 @@ class WxTrayApp:
         dlg.Destroy()
         return {**global_data, "forwards": forwards_data}
 
-    def _show_sso_prompt(self, auth_url: str, message: str, button_label: str = "開く"):
+    def _show_sso_prompt(self, auth_url: str, message: str, button_label: str = "開く", user_code: Optional[str] = None):
         """
         右下に出すミニダイアログを表示し、クリックで _launch_webview を呼ぶ。
         - 既存表示があれば閉じて新しい内容に差し替える
@@ -815,6 +835,7 @@ class WxTrayApp:
         """
         # 既存があればいったん閉じてメッセージを更新
         self._close_mini_prompt()
+        self._mini_prompt_mode = "normal"
 
         # MiniPrompt に渡すコールバックは、このインスタンスのメソッドをバインドする
         def on_click():
@@ -831,7 +852,7 @@ class WxTrayApp:
                 log_message(f"[webview-launch] failed: {e}")
 
         wrapped = _wrap_text_for_prompt(message, width=20)
-        self._mini_prompt = MiniPrompt(message=wrapped, on_click=on_click, button_label=button_label)
+        self._mini_prompt = MiniPrompt(message=wrapped, on_click=on_click, button_label=button_label, user_code=user_code)
         self._mini_prompt.show_bottom_right()
 
     def _close_mini_prompt(self):
@@ -841,12 +862,14 @@ class WxTrayApp:
             except Exception:
                 pass
             self._mini_prompt = None
+        self._mini_prompt_mode = None
 
-    def _show_browser_prompt(self, url: str, message: str):
+    def _show_browser_prompt(self, url: str, message: str, user_code: Optional[str] = None):
         """
         右下ダイアログでブラウザ起動を促す（自動では開かない）。
         """
         self._close_mini_prompt()
+        self._mini_prompt_mode = "normal"
 
         def on_click():
             try:
@@ -855,7 +878,33 @@ class WxTrayApp:
                 log_message(f"[webview-fallback] browser open failed: {e}")
 
         wrapped = _wrap_text_for_prompt(message, width=20)
-        self._mini_prompt = MiniPrompt(message=wrapped, on_click=on_click, button_label="開く")
+        self._mini_prompt = MiniPrompt(message=wrapped, on_click=on_click, button_label="開く", user_code=user_code)
+        self._mini_prompt.show_bottom_right()
+
+    def _show_device_code_prompt(self, auth_url: str, user_code: Optional[str]):
+        """
+        device URL の場合は認証コード付きでミニダイアログを表示する。
+        """
+        if not user_code:
+            return
+        self._close_mini_prompt()
+        self._mini_prompt_mode = "device_code"
+
+        def on_click():
+            if self._webview_running:
+                log_message("[webview-launch] skipped: webview already running")
+                return
+            try:
+                launcher = getattr(self, "_launch_webview", None)
+                if launcher is None:
+                    log_message("[webview-launch] failed: _launch_webview missing")
+                    return
+                launcher(auth_url)
+            except Exception as e:
+                log_message(f"[webview-launch] failed: {e}")
+
+        wrapped = _wrap_text_for_prompt(DEVICE_CODE_MESSAGE, width=20)
+        self._mini_prompt = MiniPrompt(message=wrapped, on_click=on_click, button_label="開く", user_code=user_code)
         self._mini_prompt.show_bottom_right()
 
     def _launch_webview(self, fallback_url: str):
@@ -872,13 +921,15 @@ class WxTrayApp:
                     log_message("[webview-launch] no primary forward, abort")
                     return
                 url_to_open = fallback_url
+                is_device_url = False
+                user_code = None
                 log_message(f"[webview-launch] requested (fallback={fallback_url})")
                 if not self.config:
                     log_message("[webview-launch] no config, abort")
                     return
                 try:
                     log_message("[webview-launch] fetching authorize url...")
-                    url, _ = _fetch_authorize_url(
+                    url, code = _fetch_authorize_url(
                         forward.profile,
                         forward.region,
                         self.config.sso_start_url,
@@ -888,8 +939,12 @@ class WxTrayApp:
                         url_to_open = url
                         if "authorize" in url.lower():
                             log_message(f"[webview-launch] authorize url fetched: {url}")
+                            is_device_url = False
                         else:
                             log_message(f"[webview-launch] device url fallback: {url}")
+                            is_device_url = True
+                            user_code = _extract_user_code(url, code)
+                            wx.CallAfter(self._show_device_code_prompt, url, user_code)
                     else:
                         # ここで繰り返し _show_sso_prompt を出すと「開く」→再取得失敗→再度「開く」で無限ループになる。
                         # 認可URLが取れない場合は AWS CLI やネットワーク前提が満たされていないと推測し、
@@ -903,13 +958,21 @@ class WxTrayApp:
                     wx.CallAfter(self._show_browser_prompt, fallback_url, FAIL_AUTH_URL_MESSAGE)
                     return
 
-                ok = start_sso_login_webview(url_to_open, timeout_seconds=self.config.sso_login_timeout_seconds)
+                ok = start_sso_login_webview(
+                    url_to_open,
+                    timeout_seconds=self.config.sso_login_timeout_seconds,
+                    user_code=user_code if is_device_url else None,
+                )
                 log_message(f"[webview-launch] start_sso_login_webview result={ok}")
                 if ok:
                     # 成功したらミニダイアログは閉じる
-                    wx.CallAfter(self._close_mini_prompt)
+                    if getattr(self, "_mini_prompt_mode", None) != "device_code":
+                        wx.CallAfter(self._close_mini_prompt)
                 else:
-                    wx.CallAfter(self._show_browser_prompt, fallback_url, FAIL_AUTH_URL_MESSAGE)
+                    if is_device_url:
+                        wx.CallAfter(self._show_browser_prompt, url_to_open, DEVICE_CODE_MESSAGE, user_code)
+                    else:
+                        wx.CallAfter(self._show_browser_prompt, fallback_url, FAIL_AUTH_URL_MESSAGE)
             finally:
                 self._webview_running = False
 
@@ -1144,7 +1207,7 @@ def open_qt_webview_authorize(
         return True
 
 
-def start_sso_login_webview(url: str, timeout_seconds: Optional[int] = None) -> bool:
+def start_sso_login_webview(url: str, timeout_seconds: Optional[int] = None, user_code: Optional[str] = None) -> bool:
     """
     認可URLを Qt WebEngine (PySide6) で開く。失敗時はミニダイアログ経由でブラウザフォールバック。
     """
@@ -1172,6 +1235,7 @@ def start_sso_login_webview(url: str, timeout_seconds: Optional[int] = None) -> 
                 tray_app._show_browser_prompt(
                     url,
                     "WebView を開けませんでした。右下の「開く」でブラウザを開いてログインしてください。",
+                    user_code=user_code,
                 )
                 notify(
                     "SSO ログイン",
@@ -1318,86 +1382,90 @@ def _save_config(data: Dict[str, Any]):
 # ===== ミニダイアログ =====
 
 
-class MiniPrompt(wx.Frame):
+class MiniPrompt:
     """
-    右下に出す小さな半透明ダイアログ。
-    クリックでコールバックを呼ぶだけでフォーカス奪取を最小化。
+    tkinter のミニダイアログをサブプロセスで起動するラッパー。
     """
 
-    def __init__(self, message: str, on_click: Callable[[], None], button_label: str = "開く"):
-        style = wx.STAY_ON_TOP | wx.FRAME_NO_TASKBAR | wx.BORDER_SIMPLE
-        # すべてのミニダイアログで同一サイズを使用し、UI の揺れを防ぐ
-        super().__init__(None, title="", size=MINI_PROMPT_SIZE, style=style)
-        # 念のため常に最前面フラグを維持
-        self.SetWindowStyleFlag(self.GetWindowStyle() | wx.STAY_ON_TOP)
+    def __init__(self, message: str, on_click: Callable[[], None], button_label: str = "開く", user_code: Optional[str] = None):
+        self.message = message
         self.on_click = on_click
-        # 横幅は 20 文字程度に合わせてコンパクトに、縦は行数に耐えられる高さを確保
-        self.SetSize(MINI_PROMPT_SIZE)
-        self.SetMinSize((MINI_PROMPT_SIZE[0], MINI_PROMPT_HEIGHT))
-        panel = wx.Panel(self)
-        panel.SetBackgroundColour(wx.Colour(245, 245, 245))
-        sizer = wx.BoxSizer(wx.VERTICAL)
-        label = wx.StaticText(panel, label=message, style=wx.ALIGN_LEFT)
-        # 読みやすいフォントに調整
-        font = label.GetFont()
-        font.SetPointSize(max(12, font.GetPointSize() + 3))
-        font.SetWeight(wx.FONTWEIGHT_BOLD)
-        label.SetFont(font)
-        label.SetForegroundColour(wx.Colour(0, 0, 0))
-        # 長い文言でも折り返す（任意ラップ後の微調整）
-        label.Wrap(260)
-        btn = wx.Button(panel, label=button_label)
-        btn_font = btn.GetFont()
-        btn_font.SetPointSize(max(12, btn_font.GetPointSize() + 3))
-        btn_font.SetWeight(wx.FONTWEIGHT_BOLD)
-        btn.SetFont(btn_font)
-        btn.SetForegroundColour(wx.Colour(0, 0, 0))
-        sizer.Add(label, 0, wx.ALL | wx.EXPAND, 12)
-        sizer.AddStretchSpacer()
-        sizer.Add(btn, 0, wx.ALL | wx.ALIGN_RIGHT, 12)
-        panel.SetSizer(sizer)
-
-        # Windows のレイヤードウィンドウでは子コントロールが描画されないことがあるため、
-        # 透過は Windows 以外でのみ有効化する
-        if not platforms.is_windows():
-            try:
-                self.SetTransparent(190)
-            except Exception:
-                pass
-
-        # クリックでコールバック
-        btn.Bind(wx.EVT_BUTTON, self._on_click)
-        self.Bind(wx.EVT_LEFT_DOWN, self._on_click)
-        panel.Bind(wx.EVT_LEFT_DOWN, self._on_click)
-        label.Bind(wx.EVT_LEFT_DOWN, self._on_click)
+        self.button_label = button_label
+        self.user_code = user_code
+        self._proc: Optional[subprocess.Popen] = None
+        self._signal_path: Optional[str] = None
+        self._stop = threading.Event()
 
     def show_bottom_right(self):
+        if self._proc and self._proc.poll() is None:
+            return
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        self._signal_path = tmp.name
+        cmd = [
+            sys.executable,
+            "-m",
+            "aws_conn_tray.tk_mini_prompt",
+            "--message",
+            self.message,
+            "--button-label",
+            self.button_label,
+            "--signal-file",
+            self._signal_path,
+        ]
+        if self.user_code:
+            cmd += ["--user-code", self.user_code]
         try:
-            scr_w, scr_h = wx.GetDisplaySize()
-            w, h = self.GetSize()
-            x = max(0, scr_w - w - 20)
-            y = max(0, scr_h - h - 40)
-            self.SetPosition((x, y))
-            # フォーカスを奪わずに表示
-            if hasattr(self, "ShowWithoutActivating"):
-                self.ShowWithoutActivating()
-            else:
-                self.Show()
-            self.Raise()
-        except Exception:
-            self.Show()
-
-    def _on_click(self, _evt=None):
-        try:
-            if self.on_click:
-                self.on_click()
+            popen_kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+            if platforms.is_windows() and hasattr(subprocess, "CREATE_NO_WINDOW"):
+                popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            self._proc = subprocess.Popen(cmd, **popen_kwargs)
         except Exception as e:
-            log_message(f"[wx-mini] click handler error: {e}")
-        finally:
+            log_message(f"[tk-mini] failed to start: {e}")
+            return
+
+        def _watch():
+            while not self._stop.is_set():
+                if self._signal_path and os.path.exists(self._signal_path):
+                    try:
+                        with open(self._signal_path, "r", encoding="utf-8") as f:
+                            data = f.read().strip()
+                        if data == "open":
+                            try:
+                                if self.on_click:
+                                    self.on_click()
+                            except Exception as e:
+                                log_message(f"[tk-mini] click handler error: {e}")
+                            break
+                    except Exception:
+                        pass
+                if self._proc and self._proc.poll() is not None:
+                    break
+                time.sleep(0.2)
+            self._cleanup_signal()
+
+        threading.Thread(target=_watch, daemon=True).start()
+
+    def Destroy(self):
+        self._stop.set()
+        if self._proc and self._proc.poll() is None:
             try:
-                self.Destroy()
+                self._proc.terminate()
+                self._proc.wait(timeout=1)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+        self._cleanup_signal()
+
+    def _cleanup_signal(self):
+        if self._signal_path:
+            try:
+                os.unlink(self._signal_path)
             except Exception:
                 pass
+            self._signal_path = None
 
 
 def _wrap_text_for_prompt(text: str, width: int = 20) -> str:
@@ -1462,6 +1530,31 @@ def _parse_authorize_url(text: str) -> Tuple[Optional[str], Optional[str]]:
     if m:
         code = m.group(0)
     return url, code
+
+
+def _extract_user_code(url: Optional[str], code: Optional[str]) -> Optional[str]:
+    """
+    device URL または出力テキストから user_code を抽出する。
+    """
+    if code:
+        return code
+    if not url:
+        return None
+    try:
+        parsed = urlparse(url)
+        # user_code は query もしくは fragment に入る
+        for blob in (parsed.query or "", parsed.fragment or ""):
+            if not blob:
+                continue
+            if "?" in blob:
+                blob = blob.split("?", 1)[1]
+            qs = parse_qs(blob)
+            val = (qs.get("user_code") or [None])[0]
+            if val:
+                return val
+    except Exception:
+        return None
+    return None
 
 
 def _clear_sso_login_proc(proc: Optional[subprocess.Popen] = None) -> None:
