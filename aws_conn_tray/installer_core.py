@@ -90,16 +90,17 @@ def _run_windows_elevated(cmd: List[str]) -> int:
         return 1
     if not cmd:
         return 1
-    try:
-        arg_line = subprocess.list2cmdline(cmd[1:])
-    except Exception:
-        arg_line = " ".join(cmd[1:])
+    args = cmd[1:]
+    if args:
+        arg_list = "@(" + ", ".join(_ps_quote(a) for a in args) + ")"
+    else:
+        arg_list = "@()"
     ps = (
-        "Start-Process -FilePath "
-        + repr(cmd[0])
-        + " -ArgumentList "
-        + repr(arg_line)
-        + " -Verb RunAs -Wait -PassThru | ForEach-Object { exit $_.ExitCode }"
+        "$args="
+        + arg_list
+        + "; Start-Process -FilePath "
+        + _ps_quote(cmd[0])
+        + " -ArgumentList $args -Verb RunAs -Wait -PassThru | ForEach-Object { exit $_.ExitCode }"
     )
     res = subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=False)
     return getattr(res, "returncode", 1)
@@ -747,7 +748,16 @@ def enable_autostart(install_dir: Path, dry_run: bool = False, runner: Callable[
     executed: List[List[str]] = []
     if platforms.is_windows():
         task_xml = _windows_task_xml(install_dir, py_exec)
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xml")
+        tmp_dir = os.environ.get("TEMP") or os.environ.get("TMP")
+        if tmp_dir:
+            try:
+                os.makedirs(tmp_dir, exist_ok=True)
+            except Exception:
+                tmp_dir = None
+        try:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xml", dir=tmp_dir)
+        except Exception:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xml")
         try:
             tmp.write(task_xml.encode("utf-16"))
             tmp.close()

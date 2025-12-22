@@ -155,14 +155,28 @@ def run_gui():
     def on_enable():
         try:
             toggle_autostart(True, install_dir=install_dir)
-            messagebox.showinfo("自動起動", "自動起動を有効にしました。")
+            if is_autostart_enabled(install_dir):
+                messagebox.showinfo("自動起動", "自動起動を有効にしました。")
+            else:
+                messagebox.showerror(
+                    "自動起動",
+                    "自動起動の登録に失敗しました。\n"
+                    "管理者権限での実行やタスク登録状況を確認してください。",
+                )
         finally:
             refresh_status()
 
     def on_disable():
         try:
             toggle_autostart(False, install_dir=install_dir)
-            messagebox.showinfo("自動起動", "自動起動を無効にしました。")
+            if is_autostart_enabled(install_dir):
+                messagebox.showerror(
+                    "自動起動",
+                    "自動起動の解除に失敗しました。\n"
+                    "管理者権限での実行やタスク登録状況を確認してください。",
+                )
+            else:
+                messagebox.showinfo("自動起動", "自動起動を無効にしました。")
         finally:
             refresh_status()
 
