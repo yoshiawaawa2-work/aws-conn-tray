@@ -202,12 +202,15 @@ class WxTrayIcon(wx.adv.TaskBarIcon):
             header = menu.Append(-1, "▼ フォワード状態（クリック不可）")
             header.Enable(False)
             for name, status in self.forward_statuses.items():
-                item = menu.Append(-1, name)
-                item.Enable(False)  # インジケータのみ
+                item = menu.Append(-1, f"  {name}")
+                item.Enable(False)  # 状態表示のみ（クリック不可）
                 try:
                     bmp = self._get_status_bitmap(status)
                     if bmp and bmp.IsOk():
                         item.SetBitmap(bmp)
+                        # 無効化でも色付きビットマップを維持
+                        if hasattr(item, "SetDisabledBitmap"):
+                            item.SetDisabledBitmap(bmp)
                 except Exception:
                     pass
             menu.AppendSeparator()
