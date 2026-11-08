@@ -168,6 +168,7 @@ def run_sso_login(profile: str, region: str, sso_start_url: str, timeout: int) -
     deadline = time.time() + timeout
     stdout_acc = ""
     stderr_acc = ""
+    authorize_url = None
     device_url = None
     code_hint = None
     url_opened = False
@@ -192,10 +193,13 @@ def run_sso_login(profile: str, region: str, sso_start_url: str, timeout: int) -
                 log_message(f"SSO login stdout (final): {out.strip()}")
             if err:
                 log_message(f"SSO login stderr (final): {err.strip()}")
-            if not device_url:
+            if not (authorize_url or device_url):
                 url, code = _parse_device_flow(stdout_acc + "\n" + stderr_acc)
                 if url:
-                    device_url = url
+                    if "authorize" in url:
+                        authorize_url = url
+                    else:
+                        device_url = url
                 if code and not code_hint:
                     code_hint = code
             break
@@ -229,14 +233,17 @@ def run_sso_login(profile: str, region: str, sso_start_url: str, timeout: int) -
             url, code = _parse_device_flow(line)
             if code and not code_hint:
                 code_hint = code
-            if url and not device_url:
-                device_url = url
-            if device_url and not url_opened:
-                _open_auth_ui(device_url, code_hint)
+            if url:
+                if "authorize" in url and not authorize_url:
+                    authorize_url = url
+                elif not device_url:
+                    device_url = url
+            if authorize_url and not url_opened:
+                _open_auth_ui(authorize_url, code_hint)
                 url_opened = True
 
         if not url_opened and not fallback_opened and (time.time() - start_time) > 3:
-            _open_auth_ui(device_url or sso_start_url, code_hint)
+            _open_auth_ui(authorize_url or device_url or sso_start_url, code_hint)
             fallback_opened = True
 
         token_ok, _ = check_sso_token(expected_start_url=sso_start_url)
@@ -270,8 +277,8 @@ def run_sso_login(profile: str, region: str, sso_start_url: str, timeout: int) -
         log_message(f"SSO login failed after process success: {detail}")
         return False
 
-    if device_url:
-        LAST_DEVICE_URL = device_url
+    if authorize_url or device_url:
+        LAST_DEVICE_URL = authorize_url or device_url
     if code_hint:
         LAST_DEVICE_CODE = code_hint
 

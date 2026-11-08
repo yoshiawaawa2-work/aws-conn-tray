@@ -44,6 +44,29 @@ def _ps_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _windows_user_sid() -> Optional[str]:
+    """
+    Windows の現在ユーザー SID を取得する。
+    取得できない場合は None を返す。
+    """
+    if not platforms.is_windows():
+        return None
+    try:
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        sid = (res.stdout or "").strip()
+        if sid.startswith("S-1-"):
+            return sid
+    except Exception:
+        return None
+    return None
+
+
 def _create_windows_shortcut(
     path: Path,
     target: str,
@@ -90,16 +113,17 @@ def _run_windows_elevated(cmd: List[str]) -> int:
         return 1
     if not cmd:
         return 1
-    try:
-        arg_line = subprocess.list2cmdline(cmd[1:])
-    except Exception:
-        arg_line = " ".join(cmd[1:])
+    args = cmd[1:]
+    if args:
+        arg_list = "@(" + ", ".join(_ps_quote(a) for a in args) + ")"
+    else:
+        arg_list = "@()"
     ps = (
-        "Start-Process -FilePath "
-        + repr(cmd[0])
-        + " -ArgumentList "
-        + repr(arg_line)
-        + " -Verb RunAs -Wait -PassThru | ForEach-Object { exit $_.ExitCode }"
+        "$args="
+        + arg_list
+        + "; Start-Process -FilePath "
+        + _ps_quote(cmd[0])
+        + " -ArgumentList $args -Verb RunAs -Wait -PassThru | ForEach-Object { exit $_.ExitCode }"
     )
     res = subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=False)
     return getattr(res, "returncode", 1)
@@ -113,6 +137,9 @@ def _windows_task_xml(install_dir: Path, py_exec: str) -> str:
     user = os.environ.get("USERNAME") or "User"
     domain = os.environ.get("USERDOMAIN")
     user_id = f"{domain}\\{user}" if domain else user
+    sid = _windows_user_sid()
+    if sid:
+        user_id = sid
     return "\n".join(
         [
             '<?xml version="1.0" encoding="UTF-16"?>',
@@ -747,7 +774,16 @@ def enable_autostart(install_dir: Path, dry_run: bool = False, runner: Callable[
     executed: List[List[str]] = []
     if platforms.is_windows():
         task_xml = _windows_task_xml(install_dir, py_exec)
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xml")
+        tmp_dir = os.environ.get("TEMP") or os.environ.get("TMP")
+        if tmp_dir:
+            try:
+                os.makedirs(tmp_dir, exist_ok=True)
+            except Exception:
+                tmp_dir = None
+        try:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xml", dir=tmp_dir)
+        except Exception:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xml")
         try:
             tmp.write(task_xml.encode("utf-16"))
             tmp.close()

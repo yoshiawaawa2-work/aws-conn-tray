@@ -101,7 +101,11 @@ def test_start_sso_login_webview_fallback(monkeypatch):
     # open_qt_webview_authorize が False を返した場合にミニダイアログ経由のブラウザ誘導になるか
     called_prompt = {}
     stub_app = type("App", (), {})()
-    stub_app._tray_app = type("Tray", (), {"_show_browser_prompt": lambda self, url, msg: called_prompt.setdefault("msg", msg)})()
+    stub_app._tray_app = type(
+        "Tray",
+        (),
+        {"_show_browser_prompt": lambda self, url, msg, user_code=None: called_prompt.setdefault("msg", msg)},
+    )()
     monkeypatch.setattr(wx_tray.wx, "GetApp", lambda: stub_app)
     monkeypatch.setattr(wx_tray, "open_qt_webview_authorize", lambda url, storage_dir=None, on_fail=None, on_close=None: False)
     monkeypatch.setattr(wx_tray, "notify", lambda *a, **k: called_prompt.setdefault("notify", True))
@@ -110,8 +114,35 @@ def test_start_sso_login_webview_fallback(monkeypatch):
     ok = wx_tray.start_sso_login_webview("https://example.com/auth", timeout_seconds=10)
     assert ok is False
     assert "msg" in called_prompt
-    assert "WebView を開けませんでした" in called_prompt["msg"]
+    assert "認証画面を開けませんでした" in called_prompt["msg"]
     assert called_prompt.get("cancel_reason") == "browser_fallback"
+
+
+def test_start_sso_login_webview_close_skips_prompt_when_session_valid(monkeypatch):
+    called = {}
+    stub_app = type("App", (), {})()
+    stub_tray = type("Tray", (), {})()
+    stub_tray.config = type("C", (), {"sso_start_url": "https://start.example.com"})()
+    stub_tray._get_primary_forward = lambda: type("F", (), {"profile": "p", "region": "r"})()
+    stub_tray._show_browser_prompt = lambda *a, **k: called.setdefault("prompt", True)
+    stub_app._tray_app = stub_tray
+
+    monkeypatch.setattr(wx_tray.wx, "GetApp", lambda: stub_app)
+    monkeypatch.setattr(wx_tray, "check_sso_token", lambda *a, **k: (True, 100))
+    monkeypatch.setattr(wx_tray, "is_sso_session_valid", lambda p, r: True)
+    monkeypatch.setattr(wx_tray, "_schedule_sso_login_cancel", lambda *a, **k: called.setdefault("cancel", True))
+
+    def fake_open(url, storage_dir=None, on_fail=None, on_close=None):
+        if on_close:
+            on_close(0, "", "")
+        return True
+
+    monkeypatch.setattr(wx_tray, "open_qt_webview_authorize", fake_open)
+
+    ok = wx_tray.start_sso_login_webview("https://oidc.example.com/authorize", timeout_seconds=10)
+    assert ok is True
+    assert "prompt" not in called
+    assert "cancel" not in called
 
 
 def test_qt_webview_crash_triggers_browser_fallback(monkeypatch):
@@ -138,7 +169,11 @@ def test_qt_webview_crash_triggers_browser_fallback(monkeypatch):
     monkeypatch.setattr(wx_tray, "cleanup_qt_webview_procs", lambda force=False: None)
     monkeypatch.setattr(wx_tray.webbrowser, "open", lambda url: called_prompt.setdefault("opened", url))
     stub_app = type("App", (), {})()
-    stub_app._tray_app = type("Tray", (), {"_show_browser_prompt": lambda self, url, msg: called_prompt.setdefault("msg", msg)})()
+    stub_app._tray_app = type(
+        "Tray",
+        (),
+        {"_show_browser_prompt": lambda self, url, msg, user_code=None: called_prompt.setdefault("msg", msg)},
+    )()
     monkeypatch.setattr(wx_tray.wx, "GetApp", lambda: stub_app)
 
     ok = wx_tray.open_qt_webview_authorize("https://example.com/auth", storage_dir="/tmp/webview", on_fail=lambda: stub_app._tray_app._show_browser_prompt("https://example.com/auth", "fallback"))
@@ -162,7 +197,7 @@ def test_qt_webview_close_triggers_cancel(monkeypatch):
 
     monkeypatch.setattr(wx_tray.subprocess, "Popen", lambda *a, **k: DummyProc())
     monkeypatch.setattr(wx_tray, "_schedule_sso_login_cancel", lambda reason, grace_seconds=0: (called.setdefault("reason", reason), done.set()))
-    ok = wx_tray.open_qt_webview_authorize("https://example.com", on_close=lambda rc: wx_tray._schedule_sso_login_cancel("webview_closed", grace_seconds=0))
+    ok = wx_tray.open_qt_webview_authorize("https://example.com", on_close=lambda rc, _out, _err: wx_tray._schedule_sso_login_cancel("webview_closed", grace_seconds=0))
     assert ok is True
     assert done.wait(timeout=1.0)
     assert called["reason"] == "webview_closed"
@@ -226,9 +261,10 @@ def test_show_prompts_wrap_text(monkeypatch):
 
     # スタブ MiniPrompt で渡されたテキストを記録
     class DummyPrompt:
-        def __init__(self, message, on_click=None, button_label="開く"):
+        def __init__(self, message, on_click=None, button_label="開く", user_code=None):
             called["message"] = message
             called["button"] = button_label
+            called["user_code"] = user_code
         def show_bottom_right(self):
             called["shown"] = True
 
@@ -240,11 +276,34 @@ def test_show_prompts_wrap_text(monkeypatch):
     app._show_sso_prompt("https://auth", "これは長い文言です")
     assert called.get("message", "").startswith("WRAP:")
     assert called.get("button") == "開く"
+    assert called.get("user_code") is None
 
     called.clear()
     app._show_browser_prompt("https://auth", "ブラウザで開きます")
     assert called.get("message", "").startswith("WRAP:")
     assert called.get("button") == "開く"
+    assert called.get("user_code") is None
+
+
+def test_device_code_prompt_hides_open_button(monkeypatch):
+    app = _bare_app()
+    app._webview_running = False
+    called = {}
+
+    class DummyPrompt:
+        def __init__(self, message, on_click=None, button_label="開く", user_code=None):
+            called["message"] = message
+            called["button"] = button_label
+            called["user_code"] = user_code
+        def show_bottom_right(self):
+            called["shown"] = True
+
+    monkeypatch.setattr(wx_tray, "MiniPrompt", DummyPrompt)
+    app._show_device_code_prompt("https://d.example.com/start/#/device?user_code=ABCD-EFGH", "ABCD-EFGH")
+
+    assert called.get("shown") is True
+    assert called.get("button") is None
+    assert called.get("user_code") == "ABCD-EFGH"
 
 
 def test_mini_prompt_size_constants():
@@ -308,6 +367,13 @@ def test_parse_authorize_url_device_flow_without_authorize():
     url, code = wx_tray._parse_authorize_url(text)
     assert "device.sso" in url
     assert code == "ABCD-EFGH"
+
+
+def test_extract_user_code_prefers_explicit():
+    url = "https://d.example.com/start/#/device?user_code=ZZZZ-1111"
+    assert wx_tray._extract_user_code(url, "ABCD-0000") == "ABCD-0000"
+    assert wx_tray._extract_user_code(url, None) == "ZZZZ-1111"
+    assert wx_tray._extract_user_code("https://oidc.example.com/authorize", None) is None
 
 
 def test_notify_token_invalid_message(monkeypatch):
@@ -484,7 +550,7 @@ def test_refresh_webview_fallback(monkeypatch):
     monkeypatch.setattr(wx_tray.threading, "Thread", fake_thread)
     # URL 取得成功 → 自動で WebView を開く
     monkeypatch.setattr(wx_tray, "_fetch_authorize_url", lambda *a, **k: ("https://auth.example.com/authorize", None))
-    def fake_start(url, timeout_seconds=None):
+    def fake_start(url, timeout_seconds=None, user_code=None):
         called["opened"] += 1
         return True
     monkeypatch.setattr(wx_tray, "start_sso_login_webview", fake_start)
@@ -537,8 +603,8 @@ def test_refresh_webview_fetch_fail(monkeypatch):
 
     monkeypatch.setattr(wx_tray.threading, "Thread", fake_thread)
     monkeypatch.setattr(wx_tray, "_fetch_authorize_url", lambda *a, **k: (None, None))
-    monkeypatch.setattr(wx_tray, "start_sso_login_webview", lambda url, timeout_seconds=None: False)
-    def fake_browser_prompt(url, msg):
+    monkeypatch.setattr(wx_tray, "start_sso_login_webview", lambda url, timeout_seconds=None, user_code=None: False)
+    def fake_browser_prompt(url, msg, user_code=None):
         called.setdefault("prompt", (url, msg))
     app._show_browser_prompt = fake_browser_prompt
     def fake_callafter(fn, *a, **k):
@@ -571,10 +637,10 @@ def test_launch_webview_fetch_failure_prompts_browser(monkeypatch):
             "sso_login_timeout_seconds": 5,
         },
     )()
-    app._show_browser_prompt = lambda url, msg: called.setdefault("prompt", (url, msg))
+    app._show_browser_prompt = lambda url, msg, user_code=None: called.setdefault("prompt", (url, msg))
 
     monkeypatch.setattr(wx_tray, "_fetch_authorize_url", lambda *a, **k: (None, None))
-    monkeypatch.setattr(wx_tray, "start_sso_login_webview", lambda url, timeout_seconds=None: False)
+    monkeypatch.setattr(wx_tray, "start_sso_login_webview", lambda url, timeout_seconds=None, user_code=None: False)
     monkeypatch.setattr(wx_tray, "log_message", lambda *a, **k: None)
     # CallAfter は即時呼び出しに差し替え
     monkeypatch.setattr(wx_tray.wx, "CallAfter", lambda fn, *a, **k: fn(*a, **k))
@@ -588,6 +654,42 @@ def test_launch_webview_fetch_failure_prompts_browser(monkeypatch):
     # 代表フォワードが利用されているかの簡易検証
     assert app._primary_forward.profile == "p"
 
+
+def test_launch_webview_device_url_shows_code_prompt(monkeypatch):
+    app = _bare_app()
+    app._webview_running = False
+    app.config = type(
+        "C",
+        (),
+        {
+            "profile": "p",
+            "region": "r",
+            "sso_start_url": "https://start.example.com",
+            "sso_login_timeout_seconds": 5,
+        },
+    )()
+    called = {}
+
+    def fake_thread(target, daemon):
+        class Dummy:
+            def start(self_inner):
+                target()
+        return Dummy()
+
+    monkeypatch.setattr(wx_tray.threading, "Thread", fake_thread)
+    monkeypatch.setattr(
+        wx_tray,
+        "_fetch_authorize_url",
+        lambda *a, **k: ("https://d.example.com/start/#/device?user_code=ABCD-EFGH", "ABCD-EFGH"),
+    )
+    monkeypatch.setattr(wx_tray, "start_sso_login_webview", lambda *a, **k: True)
+    app._show_device_code_prompt = lambda url, code: called.setdefault("prompt", (url, code))
+    monkeypatch.setattr(wx_tray.wx, "CallAfter", lambda fn, *a, **k: fn(*a, **k))
+    monkeypatch.setattr(wx_tray.wx, "GetApp", lambda: object())
+
+    app._launch_webview("https://start.example.com")
+
+    assert called.get("prompt") == ("https://d.example.com/start/#/device?user_code=ABCD-EFGH", "ABCD-EFGH")
 
 def test_get_primary_forward_prefers_config_forwards(monkeypatch):
     """
@@ -611,7 +713,7 @@ def test_get_primary_forward_prefers_config_forwards(monkeypatch):
 
 def test_fetch_authorize_url_accepts_non_authorize_url(monkeypatch):
     """
-    aws sso login の出力が device.sso... のように authorize を含まない場合でも URL を拾えることを検証。
+    authorize が出ない場合は device.sso... の URL をフォールバックで採用することを検証。
     """
     # PTY を使わないルートで動作させるために明示的に無効化
     monkeypatch.setattr(wx_tray, "PTY_AVAILABLE", False)
@@ -627,7 +729,7 @@ def test_fetch_authorize_url_accepts_non_authorize_url(monkeypatch):
                 "WXYZ-1234\n"
             )
             self.stderr = io.StringIO("")
-            self._rc = None
+            self._rc = 0
             self.returncode = 0
         def poll(self):
             return self._rc
@@ -636,8 +738,36 @@ def test_fetch_authorize_url_accepts_non_authorize_url(monkeypatch):
 
     url, code = wx_tray._fetch_authorize_url("p", "r", "https://start.example.com", timeout=5)
 
-    assert "device.sso" in url  # authorize を含まない URL でも拾える
+    assert "device.sso" in url
     assert code in (None, "WXYZ-1234")
+
+
+def test_fetch_authorize_url_prefers_authorize(monkeypatch):
+    """
+    device URL が先に出ても、authorize URL が後から出ればそれを優先して採用する。
+    """
+    monkeypatch.setattr(wx_tray, "PTY_AVAILABLE", False)
+    monkeypatch.setattr(wx_tray, "log_message", lambda *a, **k: None)
+
+    import io
+
+    class DummyProc:
+        def __init__(self):
+            self.stdout = io.StringIO(
+                "Open https://device.sso.ap-northeast-1.amazonaws.com/ and enter code\n"
+                "Then visit https://oidc.example.com/authorize?code=ABC\n"
+            )
+            self.stderr = io.StringIO("")
+            self._rc = 0
+            self.returncode = 0
+        def poll(self):
+            return self._rc
+
+    monkeypatch.setattr(wx_tray.subprocess, "Popen", lambda *a, **k: DummyProc())
+
+    url, _ = wx_tray._fetch_authorize_url("p", "r", "https://start.example.com", timeout=5)
+
+    assert "authorize" in (url or "")
 
 
 def test_fetch_authorize_url_reads_chunked_authorize(monkeypatch):

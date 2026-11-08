@@ -108,6 +108,12 @@ def test_enable_autostart_windows_dry_run(monkeypatch, tmp_path):
     assert "/XML" in cmds[0]
 
 
+def test_windows_task_xml_uses_sid_when_available(monkeypatch, tmp_path):
+    monkeypatch.setattr(installer_core, "_windows_user_sid", lambda: "S-1-5-21-1-2-3-1001")
+    xml = installer_core._windows_task_xml(tmp_path / "app", "C:\\Python\\python.exe")
+    assert "<UserId>S-1-5-21-1-2-3-1001</UserId>" in xml
+
+
 def test_enable_autostart_linux_uses_venv(monkeypatch, tmp_path):
     monkeypatch.setattr(installer_core.platforms, "is_windows", lambda: False)
     monkeypatch.setattr(installer_core.platforms, "is_macos", lambda: False)
