@@ -30,6 +30,8 @@ class SingleInstanceLock:
             acquired = self._file_lock.acquire(blocking=False)
             if acquired:
                 return True
+            self._file_lock = None
+            return False
         except Exception:
             # fasteners が無い/ロック失敗時はフォールバック
             self._file_lock = None
@@ -63,4 +65,3 @@ class SingleInstanceLock:
             except Exception:
                 pass
             self._sock = None
-

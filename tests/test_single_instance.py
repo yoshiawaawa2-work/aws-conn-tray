@@ -8,6 +8,7 @@ from aws_conn_tray.single_instance import SingleInstanceLock
 
 def test_single_instance_uses_fasteners(monkeypatch, tmp_path):
     calls = {"acquire": 0, "release": 0}
+    fallback_calls = []
 
     class DummyLock:
         def __init__(self, path):
@@ -22,11 +23,13 @@ def test_single_instance_uses_fasteners(monkeypatch, tmp_path):
 
     dummy_fasteners = SimpleNamespace(InterProcessLock=lambda p: DummyLock(p))
     monkeypatch.setitem(sys.modules, "fasteners", dummy_fasteners)
+    monkeypatch.setattr(socket, "socket", lambda *args, **kwargs: fallback_calls.append(args))
 
     lock1 = SingleInstanceLock(lock_dir=tmp_path, socket_port=50010)
     assert lock1.acquire() is True
     lock2 = SingleInstanceLock(lock_dir=tmp_path, socket_port=50010)
     assert lock2.acquire() is False  # fasteners 側でブロック
+    assert fallback_calls == []
     lock1.release()
     assert calls["release"] == 1
 

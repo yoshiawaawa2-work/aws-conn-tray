@@ -80,7 +80,17 @@ def test_monitor_starts_ssm_when_token_ok(monkeypatch):
         local_port=15432,
     )
     app.forward_states = {"rds": wx_tray.ForwardRuntime(forward=fw, ssm=DummySsm())}
-    app.config = type("C", (), {"forwards": [fw], "sso_start_url": "https://start", "tunnel_check_interval_seconds": 1, "sso_auto_refresh_margin_seconds": 300})()
+    app.config = type(
+        "C",
+        (),
+        {
+            "forwards": [fw],
+            "sso_start_url": "https://start",
+            "sso_login_timeout_seconds": 900,
+            "tunnel_check_interval_seconds": 1,
+            "sso_auto_refresh_margin_seconds": 300,
+        },
+    )()
 
     def fake_check(*args, **kwargs):
         return True, 100

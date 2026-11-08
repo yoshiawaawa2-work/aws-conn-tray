@@ -23,11 +23,16 @@ def test_status_menu_item_style(monkeypatch):
     tray.forward_statuses = {"rds": "red", "apprunner": "yellow"}
     menu = tray.CreatePopupMenu()
     labels = [item.GetItemLabelText() for item in menu.GetMenuItems()]
+    normalized_labels = [label.strip() for label in labels]
     # メインメニュー上にヘッダーが存在し、インジケータが並んでいること
     assert any("フォワード状態" in lbl for lbl in labels)
-    assert any(lbl == "rds" for lbl in labels)
-    assert any(lbl == "apprunner" for lbl in labels)
-    status_items = [item for item in menu.GetMenuItems() if item.GetItemLabelText() in {"rds", "apprunner"}]
+    assert "rds" in normalized_labels
+    assert "apprunner" in normalized_labels
+    status_items = [
+        item
+        for item in menu.GetMenuItems()
+        if item.GetItemLabelText().strip() in {"rds", "apprunner"}
+    ]
     assert status_items
     assert all(item.GetBitmap().IsOk() for item in status_items)
     app.ExitMainLoop()
