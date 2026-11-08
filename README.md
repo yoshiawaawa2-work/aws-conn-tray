@@ -22,7 +22,7 @@ Linux / Windows / macOS の 3OS で動作し、インストーラが仮想環境
 - `autostart_gui.py` : 自動起動登録/解除 GUI・CLI トグル。
 - `config/config.example.json` : 設定サンプル。
 - `systemd/` : 参考用の systemd 雛形（インストーラは動的生成）。
-- `doc/` : ログインフロー説明、wx 仕様、auto-start テンプレート。
+- `doc/` : ログインフロー説明、wx 仕様、auto-start テンプレート、[AWSを使ったローカル動作確認手順](doc/testing/local-operation-test.md)。
 - `tests/` : 単体テスト（GUI 依存は条件付き skip）。
 
 ## サポート OS と前提条件
